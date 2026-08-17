@@ -8,9 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qmg1.config import HORIZONS_HOURS, TrainingConfig
-from qmg1.ml.artifacts import ModelArtifactRepository
-from qmg1.ml.trainer import ForecastTrainer
+from qmg1.config import HORIZONS_HOURS, TrainingConfig  # noqa: E402
+from qmg1.ml.artifacts import ModelArtifactRepository  # noqa: E402
+from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
 
 
 PATTERNS = {
