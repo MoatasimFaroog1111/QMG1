@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from qmg1.ml.dataset import ForecastDatasetBuilder
-from qmg1.ml.exogenous import GoldSilverFeatureProvider
+from qmg1.ml.exogenous import GoldSilverFeatureProvider, UsdIndexFeatureProvider
 
 
 def _hourly_frame(index: pd.DatetimeIndex, close: list[float]) -> pd.DataFrame:
@@ -45,25 +45,54 @@ def test_gold_alignment_is_backward_only() -> None:
     )
 
 
-def test_hourly_dataset_builder_adds_gold_silver_features(tmp_path: Path) -> None:
+def test_udx_alignment_is_backward_only() -> None:
+    silver_index = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC")
+    udx_index = pd.DatetimeIndex(
+        [pd.Timestamp("2025-01-01T00:00:00Z"), pd.Timestamp("2025-01-01T02:00:00Z")]
+    )
+    silver = _hourly_frame(silver_index, [20.0, 21.0, 22.0])
+    udx = _hourly_frame(udx_index, [100.0, 101.0])
+
+    provider = UsdIndexFeatureProvider(udx)
+    augmented = provider.augment(pd.DataFrame(index=silver.index), silver)
+
+    assert augmented.loc[silver_index[1], "udx_close"] == 100.0
+    assert augmented.loc[silver_index[2], "udx_close"] == 101.0
+    assert augmented.loc[silver_index[1], "udx_source_age_hours"] == 1.0
+    assert augmented.loc[silver_index[2], "udx_source_age_hours"] == 0.0
+
+
+def test_hourly_dataset_builder_adds_gold_and_udx_features(tmp_path: Path) -> None:
     index = pd.date_range("2023-01-01", periods=1_000, freq="h", tz="UTC")
     silver_close = [20.0 + i * 0.002 for i in range(len(index))]
     gold_close = [1800.0 + i * 0.02 for i in range(len(index))]
+    udx_close = [100.0 + i * 0.001 for i in range(len(index))]
     silver = _hourly_frame(index, silver_close)
     gold = _hourly_frame(index, gold_close)
+    udx = _hourly_frame(index, udx_close)
 
     silver_path = tmp_path / "silver.csv"
     silver.to_csv(silver_path, index_label="timestamp_utc")
-    provider = GoldSilverFeatureProvider(gold, source_file="gold.csv")
+    gold_provider = GoldSilverFeatureProvider(gold, source_file="gold.csv")
+    udx_provider = UsdIndexFeatureProvider(udx, source_file="udx.csv")
 
     base = ForecastDatasetBuilder(
-        exogenous_providers=[provider]
+        exogenous_providers=[gold_provider, udx_provider]
     ).load_hourly_feature_base(str(silver_path))
 
     assert "gold_log_return_24h" in base.features.columns
     assert "gold_silver_ratio" in base.features.columns
     assert "gold_minus_silver_return_168h" in base.features.columns
+    assert "udx_log_return_24h" in base.features.columns
+    assert "usd_pressure_24h" in base.features.columns
+    assert "silver_minus_udx_return_168h" in base.features.columns
     assert base.features["gold_source_age_hours"].dropna().max() == 0.0
-    metadata = provider.metadata()
-    assert metadata["alignment"] == "backward_asof"
-    assert metadata["future_quotes_allowed"] is False
+    assert base.features["udx_source_age_hours"].dropna().max() == 0.0
+
+    gold_metadata = gold_provider.metadata()
+    udx_metadata = udx_provider.metadata()
+    assert gold_metadata["alignment"] == "backward_asof"
+    assert gold_metadata["future_quotes_allowed"] is False
+    assert udx_metadata["source_symbol"] == "UDX/USD"
+    assert udx_metadata["source_unit"] == "index_points"
+    assert udx_metadata["future_quotes_allowed"] is False
