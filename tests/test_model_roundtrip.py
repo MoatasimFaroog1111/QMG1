@@ -62,8 +62,20 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
 
     assert artifact_path.exists()
     assert metrics.rows_total >= 100
-    assert metrics.cv_splits == 2
+    # Returned metrics represent the untouched final holdout, not the
+    # development walk-forward folds used for challenger selection.
+    assert metrics.cv_splits == 1
     assert math.isfinite(metrics.mae_usd_per_kg)
+
+    artifact = repository.load("silver", 2)
+    assert artifact["schema_version"] == 4
+    assert artifact["validation_method"].startswith("development walk-forward")
+    development_candidates = artifact["selection"]["development_candidates"]
+    assert development_candidates
+    assert all(
+        candidate["metrics"]["cv_splits"] == 2
+        for candidate in development_candidates
+    )
 
     prediction = ForecastPredictor(repository).predict_latest(
         csv_path=str(csv_path),
@@ -73,6 +85,10 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
 
     assert prediction["metal"] == "silver"
     assert prediction["horizon_hours"] == 2
+    assert prediction["active_strategy"] in {
+        "persistence",
+        artifact["selected_challenger"],
+    }
     assert float(prediction["current_usd_per_kg"]) > 0
     assert float(prediction["predicted_usd_per_kg"]) > 0
     assert math.isfinite(float(prediction["predicted_change_pct"]))
