@@ -15,6 +15,7 @@ class MetalSpec:
     source_symbol: str
     downloader_instrument: str
     first_m1_available: date
+    dukascopy_decimal_factor: int = 1000
 
     @property
     def effective_start(self) -> date:
