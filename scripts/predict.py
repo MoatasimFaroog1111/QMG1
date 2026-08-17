@@ -53,6 +53,18 @@ def main() -> None:
         default=None,
         help="UDX H1 CSV required only when the active champion uses Dollar Index features.",
     )
+    parser.add_argument(
+        "--spx-hourly",
+        type=Path,
+        default=None,
+        help="SPX H1 CSV required only when the active champion uses S&P 500 features.",
+    )
+    parser.add_argument(
+        "--wti-hourly",
+        type=Path,
+        default=None,
+        help="WTI H1 CSV required only when the active champion uses crude-oil features.",
+    )
     args = parser.parse_args()
 
     paths = ProjectPaths(ROOT)
@@ -65,6 +77,10 @@ def main() -> None:
         exogenous_paths["gold"] = str(args.gold_hourly)
     if args.udx_hourly is not None:
         exogenous_paths["udx"] = str(args.udx_hourly)
+    if args.spx_hourly is not None:
+        exogenous_paths["spx"] = str(args.spx_hourly)
+    if args.wti_hourly is not None:
+        exogenous_paths["wti"] = str(args.wti_hourly)
 
     predictor = ForecastPredictor(ModelArtifactRepository(models_dir))
     result = predictor.predict_latest(
