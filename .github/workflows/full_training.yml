@@ -61,10 +61,6 @@ jobs:
         if: env.METAL == 'silver'
         run: python scripts/prepare_market_series.py --series spx --cleanup-raw
 
-      - name: Download WTI context for Silver
-        if: env.METAL == 'silver'
-        run: python scripts/prepare_market_series.py --series wti --cleanup-raw
-
       - name: Preserve hourly training datasets
         uses: actions/upload-artifact@v4
         with:
