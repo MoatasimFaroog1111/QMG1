@@ -24,6 +24,11 @@ class HorizonMetrics:
     directional_accuracy_pct: float
     persistence_mae_usd_per_kg: float
     improvement_vs_persistence_pct: float
+    latest_fold_mae_usd_per_kg: float
+    latest_fold_persistence_mae_usd_per_kg: float
+    latest_fold_improvement_vs_persistence_pct: float
+    latest_fold_directional_accuracy_pct: float
+    fold_improvement_vs_persistence_pct: tuple[float, ...]
     residual_log_return_q10: float
     residual_log_return_q90: float
 
@@ -39,12 +44,24 @@ def _smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     )
 
 
-class WalkForwardEvaluator:
-    """Expanding walk-forward evaluation with target-time purging."""
+def _improvement_pct(model_mae: float, persistence_mae: float) -> float:
+    if persistence_mae <= 0:
+        return 0.0
+    return (persistence_mae - model_mae) / persistence_mae * 100.0
 
-    def __init__(self, config: TrainingConfig, model_factory: RegressorFactory) -> None:
+
+class WalkForwardEvaluator:
+    """Purged expanding/rolling walk-forward evaluation for one model candidate."""
+
+    def __init__(
+        self,
+        config: TrainingConfig,
+        model_factory: RegressorFactory,
+        max_train_rows: int | None = None,
+    ) -> None:
         self.config = config
         self.model_factory = model_factory
+        self.max_train_rows = max_train_rows
 
     def evaluate(
         self,
@@ -61,6 +78,10 @@ class WalkForwardEvaluator:
         actual_close_parts: list[np.ndarray] = []
         current_close_parts: list[np.ndarray] = []
         residual_parts: list[np.ndarray] = []
+        fold_improvements: list[float] = []
+        latest_fold_mae = float("nan")
+        latest_fold_persistence_mae = float("nan")
+        latest_fold_directional_accuracy = float("nan")
 
         completed_folds = 0
         for fold, (train_idx, valid_idx) in enumerate(splitter.split(frame), start=1):
@@ -76,8 +97,14 @@ class WalkForwardEvaluator:
             train = candidate_train[
                 candidate_train[target_timestamp_col] < validation_start
             ]
+            purged = len(candidate_train) - len(train)
             if train.empty:
                 continue
+
+            before_window = len(train)
+            if self.max_train_rows is not None and len(train) > self.max_train_rows:
+                train = train.iloc[-self.max_train_rows :]
+            window_trimmed = before_window - len(train)
 
             model = self.model_factory.create()
             model.fit(train[feature_columns], train[target_col])
@@ -90,16 +117,32 @@ class WalkForwardEvaluator:
             actual_log_return = valid[target_col].to_numpy(dtype=float)
             predicted_close = current_close * np.exp(predicted_log_return)
 
+            fold_mae = float(mean_absolute_error(actual_close, predicted_close))
+            fold_persistence_mae = float(
+                mean_absolute_error(actual_close, current_close)
+            )
+            fold_improvement = _improvement_pct(fold_mae, fold_persistence_mae)
+            actual_direction = np.sign(actual_close - current_close)
+            predicted_direction = np.sign(predicted_close - current_close)
+            fold_directional_accuracy = float(
+                np.mean(actual_direction == predicted_direction) * 100.0
+            )
+
             predicted_close_parts.append(predicted_close)
             actual_close_parts.append(actual_close)
             current_close_parts.append(current_close)
             residual_parts.append(actual_log_return - predicted_log_return)
+            fold_improvements.append(fold_improvement)
+            latest_fold_mae = fold_mae
+            latest_fold_persistence_mae = fold_persistence_mae
+            latest_fold_directional_accuracy = fold_directional_accuracy
             completed_folds += 1
 
             print(
                 f"  [CV {fold}/{self.config.cv_splits}] "
                 f"train={len(train):,} validation={len(valid):,} "
-                f"purged={len(candidate_train) - len(train):,}"
+                f"purged={purged:,} window_trimmed={window_trimmed:,} "
+                f"vs_persistence={fold_improvement:+.2f}%"
             )
 
         if not predicted_close_parts:
@@ -119,10 +162,10 @@ class WalkForwardEvaluator:
         directional_accuracy = float(
             np.mean(actual_direction == predicted_direction) * 100.0
         )
-        improvement = (
-            (persistence_mae - mae) / persistence_mae * 100.0
-            if persistence_mae > 0
-            else 0.0
+        improvement = _improvement_pct(mae, persistence_mae)
+        latest_improvement = _improvement_pct(
+            latest_fold_mae,
+            latest_fold_persistence_mae,
         )
 
         return HorizonMetrics(
@@ -136,6 +179,11 @@ class WalkForwardEvaluator:
             directional_accuracy_pct=directional_accuracy,
             persistence_mae_usd_per_kg=persistence_mae,
             improvement_vs_persistence_pct=improvement,
+            latest_fold_mae_usd_per_kg=latest_fold_mae,
+            latest_fold_persistence_mae_usd_per_kg=latest_fold_persistence_mae,
+            latest_fold_improvement_vs_persistence_pct=latest_improvement,
+            latest_fold_directional_accuracy_pct=latest_fold_directional_accuracy,
+            fold_improvement_vs_persistence_pct=tuple(fold_improvements),
             residual_log_return_q10=float(np.quantile(residuals, 0.10)),
             residual_log_return_q90=float(np.quantile(residuals, 0.90)),
         )
