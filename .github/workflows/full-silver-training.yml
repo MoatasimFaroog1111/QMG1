@@ -8,7 +8,7 @@ concurrency:
   group: full-silver-training
   cancel-in-progress: false
 
-# Full-run revision: candidate-selector-v1
+# Full-run revision: candidate-selector-v1-benchmark
 jobs:
   full-silver:
     if: contains(github.event.head_commit.message, '[full-silver]')
@@ -78,6 +78,7 @@ jobs:
               "training_report": "models/silver/silver_training_report.json",
               "predictions": "run_reports/silver_all_predictions.json",
               "prediction_mode": "batch feature pass; rejected models shown only for research diagnostics",
+              "candidate_policy": "persistence + Ridge + full/recent HistGradientBoosting; robust overall/recent selection",
           }
           Path("run_reports/full_silver_manifest.json").write_text(
               json.dumps(manifest, indent=2), encoding="utf-8"
