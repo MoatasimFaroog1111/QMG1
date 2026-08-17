@@ -8,7 +8,12 @@ import pandas as pd
 from qmg1.features import build_features, load_m1_csv, resample_to_hourly
 from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.dataset import ForecastDatasetBuilder
-from qmg1.ml.exogenous import GOLD_SILVER_PROVIDER_NAME, GoldSilverFeatureProvider
+from qmg1.ml.exogenous import (
+    GOLD_SILVER_PROVIDER_NAME,
+    USD_INDEX_PROVIDER_NAME,
+    GoldSilverFeatureProvider,
+    UsdIndexFeatureProvider,
+)
 
 
 class ForecastPredictor:
@@ -33,9 +38,17 @@ class ForecastPredictor:
                 if not gold_path:
                     raise ValueError(
                         "This model requires a gold H1 dataset. "
-                        "Pass exogenous_csv_paths={'gold': '<XAUUSD H1 csv>'}."
+                        "Pass exogenous_csv_paths={'gold': '<XAUUSD H1 csv>', ...}."
                     )
                 providers.append(GoldSilverFeatureProvider.from_hourly_csv(gold_path))
+            elif name == USD_INDEX_PROVIDER_NAME:
+                udx_path = paths.get("udx")
+                if not udx_path:
+                    raise ValueError(
+                        "This model requires a UDX H1 dataset. "
+                        "Pass exogenous_csv_paths={'udx': '<UDXUSD H1 csv>', ...}."
+                    )
+                providers.append(UsdIndexFeatureProvider.from_hourly_csv(udx_path))
             else:
                 raise ValueError(f"Unsupported exogenous feature provider: {name}")
         return ForecastDatasetBuilder(exogenous_providers=providers)
