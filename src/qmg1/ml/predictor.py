@@ -10,9 +10,13 @@ from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.dataset import ForecastDatasetBuilder
 from qmg1.ml.exogenous import (
     GOLD_SILVER_PROVIDER_NAME,
+    SPX_PROVIDER_NAME,
     USD_INDEX_PROVIDER_NAME,
+    WTI_PROVIDER_NAME,
     GoldSilverFeatureProvider,
+    SpxFeatureProvider,
     UsdIndexFeatureProvider,
+    WtiFeatureProvider,
 )
 
 
@@ -49,6 +53,22 @@ class ForecastPredictor:
                         "Pass exogenous_csv_paths={'udx': '<UDXUSD H1 csv>', ...}."
                     )
                 providers.append(UsdIndexFeatureProvider.from_hourly_csv(udx_path))
+            elif name == SPX_PROVIDER_NAME:
+                spx_path = paths.get("spx")
+                if not spx_path:
+                    raise ValueError(
+                        "This model requires an SPX H1 dataset. "
+                        "Pass exogenous_csv_paths={'spx': '<SPXUSD H1 csv>', ...}."
+                    )
+                providers.append(SpxFeatureProvider.from_hourly_csv(spx_path))
+            elif name == WTI_PROVIDER_NAME:
+                wti_path = paths.get("wti")
+                if not wti_path:
+                    raise ValueError(
+                        "This model requires a WTI H1 dataset. "
+                        "Pass exogenous_csv_paths={'wti': '<WTIUSD H1 csv>', ...}."
+                    )
+                providers.append(WtiFeatureProvider.from_hourly_csv(wti_path))
             else:
                 raise ValueError(f"Unsupported exogenous feature provider: {name}")
         return ForecastDatasetBuilder(exogenous_providers=providers)
