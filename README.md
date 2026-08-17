@@ -213,6 +213,8 @@ GitHub Actions also runs live-source smoke tests against both verified data path
 
 The test suite additionally exercises Train -> Persist -> Load -> Predict without requiring an external market source.
 
+A dedicated one-shot workflow, `Full Silver Historical Training`, can validate the complete Silver history from May 2009 through the latest completed day, train all nine horizons, generate persisted-model predictions, and upload only models/reports as a workflow artifact. The large raw/final market dataset remains ephemeral and is never committed to Git.
+
 ## Important modeling note
 
 A backtest metric is not evidence that a future market price is certain. QMG1 benchmarks against a persistence baseline and exposes uncertainty information so model quality can be evaluated before any forecast is treated as operationally useful.
