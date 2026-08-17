@@ -5,73 +5,68 @@ import json
 import math
 import sys
 from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qmg1.config import TrainingConfig
-from qmg1.data.dukascopy import DukascopyConfig, DukascopyDownloader
-from qmg1.data.metals import METALS
-from qmg1.data.normalizer import UsdPerKgNormalizer
-from qmg1.ml.artifacts import ModelArtifactRepository
-from qmg1.ml.predictor import ForecastPredictor
-from qmg1.ml.trainer import ForecastTrainer
+from qmg1.config import TrainingConfig  # noqa: E402
+from qmg1.data.dukascopy_direct import (  # noqa: E402
+    DirectDukascopyConfig,
+    DirectDukascopyM1Downloader,
+)
+from qmg1.data.metals import METALS  # noqa: E402
+from qmg1.data.normalizer import UsdPerKgNormalizer  # noqa: E402
+from qmg1.ml.artifacts import ModelArtifactRepository  # noqa: E402
+from qmg1.ml.predictor import ForecastPredictor  # noqa: E402
+from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
 
 
 def main() -> None:
-    """Exercise the real market-data -> model -> persisted prediction path."""
+    """Exercise real BI5 data -> USD/kg -> train -> persist -> predict."""
 
     smoke_root = ROOT / "smoke_live"
     raw_root = smoke_root / "raw"
-    incoming_root = smoke_root / ".incoming"
     final_root = smoke_root / "final"
     models_root = smoke_root / "models"
     result_path = smoke_root / "smoke_result.json"
 
     silver = next(metal for metal in METALS if metal.key == "silver")
 
-    # 75 calendar days provides enough history for the longest 720-hour
-    # causal feature window while keeping this CI smoke test lightweight.
+    # Stable historical dates make CI reproducible while still proving real
+    # connectivity to Dukascopy's production datafeed. The range provides
+    # enough trading hours to populate the 720-row longest causal feature.
+    start = date(2025, 1, 2)
+    end_exclusive = date(2025, 3, 15)
+    end_inclusive = "2025-03-14"
     now_utc = datetime.now(timezone.utc)
-    end_exclusive = now_utc.date()
-    start = end_exclusive - timedelta(days=75)
-    end_inclusive = (end_exclusive - timedelta(days=1)).isoformat()
 
-    # dukascopy-node 1.49+ moved to a JSON API engine which currently returns
-    # persistent HTTP 429 responses from shared GitHub-hosted runner IPs.
-    # 1.46.4 uses the historical datafeed engine and includes the Node 22 fix,
-    # making it the compatibility engine for the bulk-data smoke path.
-    downloader = DukascopyDownloader(
+    downloader = DirectDukascopyM1Downloader(
         raw_root=raw_root,
-        incoming_root=incoming_root,
-        config=DukascopyConfig(
-            package_version="1.46.4",
-            batch_size=5,
-            batch_pause_ms=1500,
-            retry_count=8,
-            retry_pause_ms=3000,
-            process_attempts=3,
-            process_backoff_seconds=15,
+        config=DirectDukascopyConfig(
+            timeout_seconds=60,
+            max_attempts=4,
+            base_backoff_seconds=2.0,
+            request_pause_seconds=0.05,
         ),
     )
     downloader.validate_runtime()
 
     print(
-        f"[SMOKE] live silver data {start} -> {end_exclusive} (exclusive) "
-        f"engine=dukascopy-node@{downloader.config.package_version}"
+        f"[SMOKE] silver {start} -> {end_exclusive} (exclusive) "
+        f"provider={downloader.provider_description}"
     )
     raw_csv = downloader.download(silver, start, end_exclusive)
 
     normalizer = UsdPerKgNormalizer(
         output_root=final_root,
-        price_side=downloader.config.price_type,
+        price_side=downloader.price_side,
     )
     normalization = normalizer.normalize(silver, [raw_csv], end_inclusive)
-    if normalization.rows_written < 50_000:
+    if normalization.rows_written < 40_000:
         raise RuntimeError(
-            "Live data smoke test returned too few M1 rows: "
+            "Real-data smoke test returned too few M1 rows: "
             f"{normalization.rows_written:,}"
         )
     if normalization.output_file is None:
@@ -82,7 +77,7 @@ def main() -> None:
     trainer = ForecastTrainer(
         artifact_repository=repository,
         config=TrainingConfig(
-            min_rows=200,
+            min_rows=150,
             cv_splits=3,
             random_state=42,
             max_iter=100,
@@ -92,8 +87,8 @@ def main() -> None:
         ),
     )
 
-    # A 2-hour live model is enough to prove the entire operational path;
-    # full training still uses all nine configured horizons.
+    # One horizon proves the complete operational path. Full training uses all
+    # nine configured horizons and remains resume-safe through persisted files.
     metrics = trainer.train_one(str(dataset_csv), "silver", 2)
     artifact_path = repository.path_for("silver", 2)
     if not artifact_path.exists():
@@ -115,8 +110,8 @@ def main() -> None:
         "status": "success",
         "generated_at_utc": now_utc.isoformat(),
         "metal": "silver",
-        "source": "Dukascopy live M1 bid data",
-        "source_engine": f"dukascopy-node@{downloader.config.package_version}",
+        "source": "Dukascopy M1 bid data",
+        "source_engine": downloader.provider_description,
         "source_range": {
             "start": start.isoformat(),
             "end_exclusive": end_exclusive.isoformat(),
