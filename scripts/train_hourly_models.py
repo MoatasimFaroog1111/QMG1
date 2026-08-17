@@ -15,7 +15,6 @@ from qmg1.ml.exogenous import (  # noqa: E402
     GoldSilverFeatureProvider,
     SpxFeatureProvider,
     UsdIndexFeatureProvider,
-    WtiFeatureProvider,
 )
 from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
 
@@ -28,7 +27,6 @@ PATTERNS = {
 }
 UDX_PATTERN = "UDXUSD_H1_NATIVE_*.csv"
 SPX_PATTERN = "SPXUSD_H1_NATIVE_*.csv"
-WTI_PATTERN = "WTIUSD_H1_NATIVE_*.csv"
 
 
 def newest_matching(data_dir: Path, pattern: str) -> Path:
@@ -49,17 +47,14 @@ def dataset_builder_for(metal: str, data_dir: Path) -> ForecastDatasetBuilder:
     gold_csv = newest_matching(data_dir, PATTERNS["gold"])
     udx_csv = newest_matching(data_dir, UDX_PATTERN)
     spx_csv = newest_matching(data_dir, SPX_PATTERN)
-    wti_csv = newest_matching(data_dir, WTI_PATTERN)
     print(f"[EXOG] silver <- gold {gold_csv.name}")
     print(f"[EXOG] silver <- UDX  {udx_csv.name}")
     print(f"[EXOG] silver <- SPX  {spx_csv.name}")
-    print(f"[EXOG] silver <- WTI  {wti_csv.name}")
     return ForecastDatasetBuilder(
         exogenous_providers=[
             GoldSilverFeatureProvider.from_hourly_csv(gold_csv),
             UsdIndexFeatureProvider.from_hourly_csv(udx_csv),
             SpxFeatureProvider.from_hourly_csv(spx_csv),
-            WtiFeatureProvider.from_hourly_csv(wti_csv),
         ]
     )
 
