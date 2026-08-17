@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from qmg1.data.histdata import HistDataM1Downloader
+from qmg1.data.histdata import HistDataM1Downloader, HistDataPeriod
 from qmg1.data.hourly import HOURLY_COLUMNS, yearly_chunks
 from qmg1.data.metals import REQUESTED_END_EXCLUSIVE
 
@@ -50,6 +50,59 @@ class HistDataMarketSeriesDownloader(HistDataM1Downloader):
             / "market_series"
             / series.key
             / f"histdata_{series.histdata_pair.lower()}_{start}_{end}_m1.csv"
+        )
+
+    def discover_first_available_start(
+        self,
+        series: MarketSeriesSpec,
+        requested_start: date,
+        end_exclusive: date,
+    ) -> date:
+        """Find the first HistData year/month that exposes a valid download token.
+
+        Missing historical coverage is treated as a coverage fact, not as a
+        transient download failure. Network/HTTP errors are not swallowed.
+        """
+        current_year = datetime.now(timezone.utc).year
+        for year in range(requested_start.year, end_exclusive.year + 1):
+            if year < current_year:
+                probes = [HistDataPeriod(pair=series.histdata_pair, year=year)]
+            else:
+                first_month = requested_start.month if year == requested_start.year else 1
+                last_month = min(12, end_exclusive.month)
+                probes = [
+                    HistDataPeriod(pair=series.histdata_pair, year=year, month=month)
+                    for month in range(first_month, last_month + 1)
+                ]
+
+            for period in probes:
+                try:
+                    self._token(period)
+                except RuntimeError as exc:
+                    if "token not found" not in str(exc).lower():
+                        raise
+                    print(
+                        f"[MISS] HistData {series.histdata_pair} "
+                        f"{period.label} has no download token"
+                    )
+                    continue
+
+                if period.month is None:
+                    discovered = max(requested_start, date(period.year, 1, 1))
+                else:
+                    discovered = max(
+                        requested_start,
+                        date(period.year, period.month, 1),
+                    )
+                print(
+                    f"[COVERAGE] HistData {series.name}: first available "
+                    f"period={period.label}, start={discovered}"
+                )
+                return discovered
+
+        raise RuntimeError(
+            f"No HistData coverage discovered for {series.name} "
+            f"between {requested_start} and {end_exclusive}"
         )
 
     def download_series(
@@ -159,6 +212,8 @@ class MarketSeriesResult:
     series: str
     source: str
     unit: str
+    requested_start: str
+    actual_start: str
     output_file: Path
     rows: int
     start_utc: str
@@ -189,8 +244,14 @@ class MarketSeriesHourlyPipeline:
         if end_exclusive <= series.effective_start:
             raise RuntimeError(f"No completed data range for {series.name}")
 
+        actual_start = self.downloader.discover_first_available_start(
+            series,
+            series.effective_start,
+            end_exclusive,
+        )
+
         chunks: list[pd.DataFrame] = []
-        for start, stop in yearly_chunks(series.effective_start, end_exclusive):
+        for start, stop in yearly_chunks(actual_start, end_exclusive):
             raw = self.downloader.download_series(series, start, stop)
             print(f"[H1  ] {series.name:16s} {start} -> {stop}")
             hourly = self.builder.build(raw)
@@ -210,7 +271,7 @@ class MarketSeriesHourlyPipeline:
         end_inclusive = end_exclusive - timedelta(days=1)
         output = self.final_root / (
             f"{series.output_symbol}_H1_NATIVE_"
-            f"{series.effective_start.isoformat()}_to_{end_inclusive.isoformat()}.csv"
+            f"{actual_start.isoformat()}_to_{end_inclusive.isoformat()}.csv"
         )
         merged.to_csv(output, index_label="timestamp_utc")
 
@@ -218,6 +279,8 @@ class MarketSeriesHourlyPipeline:
             series=series.key,
             source="HistData",
             unit=series.unit,
+            requested_start=series.effective_start.isoformat(),
+            actual_start=actual_start.isoformat(),
             output_file=output,
             rows=len(merged),
             start_utc=merged.index[0].isoformat(),
