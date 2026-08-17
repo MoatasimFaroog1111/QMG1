@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.model_selection import TimeSeriesSplit
 
 from .config import HORIZONS_HOURS, TrainingConfig
 from .features import build_features, feature_columns, load_m1_csv, resample_to_hourly
@@ -19,8 +20,9 @@ from .features import build_features, feature_columns, load_m1_csv, resample_to_
 @dataclass(frozen=True)
 class HorizonMetrics:
     horizon_hours: int
-    rows_train: int
-    rows_validation: int
+    cv_splits: int
+    rows_total: int
+    rows_validation_total: int
     mae_usd_per_kg: float
     rmse_usd_per_kg: float
     smape_pct: float
@@ -34,7 +36,9 @@ def _smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     valid = denom > 0
     if not valid.any():
         return 0.0
-    return float(np.mean(2.0 * np.abs(y_pred[valid] - y_true[valid]) / denom[valid]) * 100.0)
+    return float(
+        np.mean(2.0 * np.abs(y_pred[valid] - y_true[valid]) / denom[valid]) * 100.0
+    )
 
 
 def _build_model(cfg: TrainingConfig) -> HistGradientBoostingRegressor:
@@ -71,34 +75,47 @@ def prepare_dataset(csv_path: str, horizon_hours: int) -> tuple[pd.DataFrame, li
     return frame, cols
 
 
-def train_one_horizon(
-    csv_path: str,
-    output_dir: Path,
-    metal: str,
+def evaluate_walk_forward(
+    frame: pd.DataFrame,
+    cols: list[str],
     horizon_hours: int,
     cfg: TrainingConfig,
 ) -> HorizonMetrics:
-    frame, cols = prepare_dataset(csv_path, horizon_hours)
-    if len(frame) < cfg.min_rows:
-        raise ValueError(
-            f"Not enough hourly rows for {metal} {horizon_hours}h: "
-            f"{len(frame):,} < {cfg.min_rows:,}"
+    splitter = TimeSeriesSplit(n_splits=cfg.cv_splits, gap=horizon_hours)
+
+    predicted_close_parts: list[np.ndarray] = []
+    actual_close_parts: list[np.ndarray] = []
+    current_close_parts: list[np.ndarray] = []
+
+    for fold, (train_idx, valid_idx) in enumerate(splitter.split(frame), start=1):
+        train = frame.iloc[train_idx]
+        valid = frame.iloc[valid_idx]
+        if train.empty or valid.empty:
+            continue
+
+        model = _build_model(cfg)
+        model.fit(train[cols], train[f"target_{horizon_hours}h"])
+
+        predicted_log_return = model.predict(valid[cols])
+        current_close = valid["close"].to_numpy(dtype=float)
+        actual_close = valid[f"future_close_{horizon_hours}h"].to_numpy(dtype=float)
+        predicted_close = current_close * np.exp(predicted_log_return)
+
+        print(
+            f"  [CV {fold}/{cfg.cv_splits}] "
+            f"train={len(train):,} validation={len(valid):,}"
         )
 
-    split = int(len(frame) * (1.0 - cfg.validation_fraction))
-    if split <= 0 or split >= len(frame):
-        raise ValueError("Invalid time-series split")
+        predicted_close_parts.append(predicted_close)
+        actual_close_parts.append(actual_close)
+        current_close_parts.append(current_close)
 
-    train = frame.iloc[:split]
-    valid = frame.iloc[split:]
+    if not predicted_close_parts:
+        raise ValueError("Walk-forward validation produced no folds")
 
-    model = _build_model(cfg)
-    model.fit(train[cols], train[f"target_{horizon_hours}h"])
-
-    predicted_log_return = model.predict(valid[cols])
-    current_close = valid["close"].to_numpy(dtype=float)
-    actual_close = valid[f"future_close_{horizon_hours}h"].to_numpy(dtype=float)
-    predicted_close = current_close * np.exp(predicted_log_return)
+    predicted_close = np.concatenate(predicted_close_parts)
+    actual_close = np.concatenate(actual_close_parts)
+    current_close = np.concatenate(current_close_parts)
 
     mae = float(mean_absolute_error(actual_close, predicted_close))
     rmse = float(math.sqrt(mean_squared_error(actual_close, predicted_close)))
@@ -113,10 +130,11 @@ def train_one_horizon(
         else 0.0
     )
 
-    metrics = HorizonMetrics(
+    return HorizonMetrics(
         horizon_hours=horizon_hours,
-        rows_train=len(train),
-        rows_validation=len(valid),
+        cv_splits=cfg.cv_splits,
+        rows_total=len(frame),
+        rows_validation_total=len(actual_close),
         mae_usd_per_kg=mae,
         rmse_usd_per_kg=rmse,
         smape_pct=_smape(actual_close, predicted_close),
@@ -125,16 +143,40 @@ def train_one_horizon(
         improvement_vs_persistence_pct=improvement,
     )
 
+
+def train_one_horizon(
+    csv_path: str,
+    output_dir: Path,
+    metal: str,
+    horizon_hours: int,
+    cfg: TrainingConfig,
+) -> HorizonMetrics:
+    frame, cols = prepare_dataset(csv_path, horizon_hours)
+    if len(frame) < cfg.min_rows:
+        raise ValueError(
+            f"Not enough hourly rows for {metal} {horizon_hours}h: "
+            f"{len(frame):,} < {cfg.min_rows:,}"
+        )
+
+    metrics = evaluate_walk_forward(frame, cols, horizon_hours, cfg)
+
+    # Train once on every feature-complete historical row after honest OOS evaluation.
+    final_model = _build_model(cfg)
+    final_model.fit(frame[cols], frame[f"target_{horizon_hours}h"])
+
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact = {
-        "schema_version": 1,
+        "schema_version": 2,
         "metal": metal,
         "horizon_hours": horizon_hours,
         "feature_columns": cols,
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
+        "training_rows": len(frame),
+        "training_start_utc": frame.index[0].isoformat(),
+        "training_end_utc": frame.index[-1].isoformat(),
         "training_config": asdict(cfg),
         "metrics": asdict(metrics),
-        "model": model,
+        "model": final_model,
     }
     joblib.dump(artifact, output_dir / f"{metal}_{horizon_hours}h.joblib")
     return metrics
@@ -157,6 +199,7 @@ def train_all_horizons(
         "metal": metal,
         "source_csv": csv_path,
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
+        "validation_method": "expanding walk-forward TimeSeriesSplit with horizon gap",
         "metrics": [asdict(m) for m in metrics],
     }
     (output_dir / f"{metal}_training_report.json").write_text(
@@ -191,5 +234,8 @@ def predict_latest(csv_path: str, artifact_path: Path) -> dict[str, float | str 
         "validation_mae_usd_per_kg": float(artifact["metrics"]["mae_usd_per_kg"]),
         "validation_directional_accuracy_pct": float(
             artifact["metrics"]["directional_accuracy_pct"]
+        ),
+        "validation_improvement_vs_persistence_pct": float(
+            artifact["metrics"]["improvement_vs_persistence_pct"]
         ),
     }
