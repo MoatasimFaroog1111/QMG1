@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-HORIZONS_HOURS: tuple[int, ...] = (6, 12, 18, 24, 48, 168, 720)
+# Forecast horizons requested by the project owner.
+# 168h = 7 days, 360h = 15 days, 720h = 30 days.
+HORIZONS_HOURS: tuple[int, ...] = (2, 4, 8, 12, 24, 72, 168, 360, 720)
 
 
 @dataclass(frozen=True)
