@@ -71,9 +71,11 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
     assert artifact["exogenous_features"] == []
     assert "candidate_training_lookback_days" in artifact
     development_candidates = artifact["selection"]["development_candidates"]
-    assert len(development_candidates) >= 9
-    assert any("lookback_730d" in item["model_name"] for item in development_candidates)
-    assert any("lookback_1825d" in item["model_name"] for item in development_candidates)
+    assert [item["model_name"] for item in development_candidates] == [
+        "median_return",
+        "selective_hgb_q80_s25",
+        "cross_fitted_selective_hgb",
+    ]
     assert all(
         candidate["metrics"]["cv_splits"] == 2
         for candidate in development_candidates
