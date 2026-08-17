@@ -66,11 +66,16 @@ def _assert_roundtrip(csv_path: Path, models_dir: Path) -> None:
     assert metrics.rows_total >= 100
     assert metrics.cv_splits == 2
     assert math.isfinite(metrics.mae_usd_per_kg)
+    assert math.isfinite(metrics.latest_fold_improvement_vs_persistence_pct)
 
+    # This test proves serialization/inference mechanics, not that a synthetic
+    # sequence has earned operational deployment. Explicitly allow a rejected
+    # candidate so the separate gate tests own acceptance behavior.
     prediction = ForecastPredictor(repository).predict_latest(
         csv_path=str(csv_path),
         metal="silver",
         horizon_hours=2,
+        allow_rejected=True,
     )
 
     assert prediction["metal"] == "silver"
@@ -78,6 +83,7 @@ def _assert_roundtrip(csv_path: Path, models_dir: Path) -> None:
     assert float(prediction["current_usd_per_kg"]) > 0
     assert float(prediction["predicted_usd_per_kg"]) > 0
     assert math.isfinite(float(prediction["predicted_change_pct"]))
+    assert isinstance(prediction["operational_accepted"], bool)
 
 
 def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
