@@ -8,9 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qmg1.config import ProjectPaths, TrainingConfig  # noqa: E402
-from qmg1.ml.artifacts import ModelArtifactRepository  # noqa: E402
-from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
+from qmg1.config import HORIZONS_HOURS, ProjectPaths, TrainingConfig
+from qmg1.ml.artifacts import ModelArtifactRepository
+from qmg1.ml.trainer import ForecastTrainer
 
 
 METAL_PATTERNS = {
@@ -37,28 +37,56 @@ def main() -> None:
         description="Train once, validate, and persist QMG1 forecasting models"
     )
     parser.add_argument("--metal", choices=[*METAL_PATTERNS, "all"], default="all")
+    parser.add_argument(
+        "--horizon",
+        type=int,
+        choices=HORIZONS_HOURS,
+        nargs="+",
+        default=None,
+        help="Optional subset of forecast horizons in hours",
+    )
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--models-dir", type=Path, default=None)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Retrain even when a persisted artifact already exists",
+    )
     args = parser.parse_args()
 
     paths = ProjectPaths(ROOT)
     data_dir = args.data_dir or paths.data_dir
     models_dir = args.models_dir or paths.models_dir
+    requested_horizons = tuple(args.horizon or HORIZONS_HOURS)
     selected = (
         METAL_PATTERNS
         if args.metal == "all"
         else {args.metal: METAL_PATTERNS[args.metal]}
     )
 
+    repository = ModelArtifactRepository(models_dir)
     trainer = ForecastTrainer(
-        artifact_repository=ModelArtifactRepository(models_dir),
+        artifact_repository=repository,
         config=TrainingConfig(),
     )
 
     for metal, pattern in selected.items():
         csv_path = newest_matching(data_dir, pattern)
         print(f"[DATA] {metal}: {csv_path}")
-        metrics = trainer.train_all(str(csv_path), metal)
+
+        pending: list[int] = []
+        for horizon in requested_horizons:
+            artifact_path = repository.path_for(metal, horizon)
+            if artifact_path.exists() and not args.force:
+                print(f"[SKIP] {metal:10s} {horizon:4d}h artifact={artifact_path}")
+            else:
+                pending.append(horizon)
+
+        if not pending:
+            print(f"[DONE] {metal}: all requested persisted models already exist")
+            continue
+
+        metrics = trainer.train_all(str(csv_path), metal, horizons=pending)
         for item in metrics:
             print(
                 f"[OK] {metal:10s} {item.horizon_hours:4d}h "
