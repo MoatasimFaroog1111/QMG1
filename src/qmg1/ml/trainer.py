@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import datetime, timezone
 
@@ -73,14 +74,27 @@ class ForecastTrainer:
         prepared = self.dataset_builder.build(csv_path, horizon_hours)
         return self._train_prepared(prepared, metal)
 
-    def train_all(self, csv_path: str, metal: str) -> list[HorizonMetrics]:
+    def train_all(
+        self,
+        csv_path: str,
+        metal: str,
+        horizons: Sequence[int] = HORIZONS_HOURS,
+    ) -> list[HorizonMetrics]:
+        requested_horizons = tuple(horizons)
+        if not requested_horizons:
+            return []
+
+        unknown = [horizon for horizon in requested_horizons if horizon not in HORIZONS_HOURS]
+        if unknown:
+            raise ValueError(f"Unsupported forecast horizons: {unknown}")
+
         # M1 loading, hourly resampling, and feature engineering are the most
         # expensive deterministic steps. Compute them once per metal, then
         # attach each requested horizon target to the same immutable base.
         base = self.dataset_builder.load_feature_base(csv_path)
         metrics: list[HorizonMetrics] = []
 
-        for horizon in HORIZONS_HOURS:
+        for horizon in requested_horizons:
             print(f"[TRAIN] {metal} horizon={horizon}h")
             prepared = self.dataset_builder.build_from_base(base, horizon)
             metrics.append(self._train_prepared(prepared, metal))
@@ -91,7 +105,7 @@ class ForecastTrainer:
             "metal": metal,
             "source_csv": csv_path,
             "trained_at_utc": datetime.now(timezone.utc).isoformat(),
-            "horizons_hours": list(HORIZONS_HOURS),
+            "horizons_hours": list(requested_horizons),
             "validation_method": "expanding walk-forward with target-time purge",
             "feature_base_reused_across_horizons": True,
             "metrics": [asdict(item) for item in metrics],
