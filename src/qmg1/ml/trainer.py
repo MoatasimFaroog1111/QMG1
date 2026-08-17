@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from qmg1.config import HORIZONS_HOURS, TrainingConfig
 from qmg1.ml.artifacts import ModelArtifactRepository
-from qmg1.ml.dataset import ForecastDatasetBuilder
+from qmg1.ml.dataset import ForecastDatasetBuilder, PreparedDataset
 from qmg1.ml.evaluation import HorizonMetrics, WalkForwardEvaluator
 from qmg1.ml.model_factory import HistGradientBoostingFactory
 
@@ -26,13 +26,12 @@ class ForecastTrainer:
         self.model_factory = HistGradientBoostingFactory(self.config)
         self.evaluator = WalkForwardEvaluator(self.config, self.model_factory)
 
-    def train_one(
+    def _train_prepared(
         self,
-        csv_path: str,
+        prepared: PreparedDataset,
         metal: str,
-        horizon_hours: int,
     ) -> HorizonMetrics:
-        prepared = self.dataset_builder.build(csv_path, horizon_hours)
+        horizon_hours = prepared.horizon_hours
         frame = prepared.frame
         features = prepared.feature_columns
 
@@ -65,11 +64,26 @@ class ForecastTrainer:
         self.artifact_repository.save(metal, horizon_hours, artifact)
         return metrics
 
+    def train_one(
+        self,
+        csv_path: str,
+        metal: str,
+        horizon_hours: int,
+    ) -> HorizonMetrics:
+        prepared = self.dataset_builder.build(csv_path, horizon_hours)
+        return self._train_prepared(prepared, metal)
+
     def train_all(self, csv_path: str, metal: str) -> list[HorizonMetrics]:
+        # M1 loading, hourly resampling, and feature engineering are the most
+        # expensive deterministic steps. Compute them once per metal, then
+        # attach each requested horizon target to the same immutable base.
+        base = self.dataset_builder.load_feature_base(csv_path)
         metrics: list[HorizonMetrics] = []
+
         for horizon in HORIZONS_HOURS:
             print(f"[TRAIN] {metal} horizon={horizon}h")
-            metrics.append(self.train_one(csv_path, metal, horizon))
+            prepared = self.dataset_builder.build_from_base(base, horizon)
+            metrics.append(self._train_prepared(prepared, metal))
 
         report_dir = self.artifact_repository.root / metal
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -79,6 +93,7 @@ class ForecastTrainer:
             "trained_at_utc": datetime.now(timezone.utc).isoformat(),
             "horizons_hours": list(HORIZONS_HOURS),
             "validation_method": "expanding walk-forward with target-time purge",
+            "feature_base_reused_across_horizons": True,
             "metrics": [asdict(item) for item in metrics],
         }
         (report_dir / f"{metal}_training_report.json").write_text(
