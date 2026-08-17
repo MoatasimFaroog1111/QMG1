@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+import pandas as pd
+
 from qmg1.features import build_features, load_m1_csv, resample_to_hourly
 from qmg1.ml.artifacts import ModelArtifactRepository
 
@@ -37,13 +39,17 @@ class ForecastPredictor:
         predicted_close = current_close * math.exp(predicted_log_return)
 
         metrics = artifact["metrics"]
-        low_log_return = predicted_log_return + float(metrics["residual_log_return_q10"])
-        high_log_return = predicted_log_return + float(metrics["residual_log_return_q90"])
+        low_log_return = predicted_log_return + float(
+            metrics["residual_log_return_q10"]
+        )
+        high_log_return = predicted_log_return + float(
+            metrics["residual_log_return_q90"]
+        )
         low_close = current_close * math.exp(low_log_return)
         high_close = current_close * math.exp(high_log_return)
 
         timestamp = ready.index[-1]
-        target_timestamp = timestamp + __import__("pandas").Timedelta(hours=horizon_hours)
+        target_timestamp = timestamp + pd.Timedelta(hours=horizon_hours)
 
         return {
             "metal": str(artifact["metal"]),
@@ -62,5 +68,8 @@ class ForecastPredictor:
             "validation_improvement_vs_persistence_pct": float(
                 metrics["improvement_vs_persistence_pct"]
             ),
-            "interval_note": "Empirical 10th-90th percentile of out-of-sample log-return residuals; not a guarantee.",
+            "interval_note": (
+                "Empirical 10th-90th percentile of out-of-sample "
+                "log-return residuals; not a guarantee."
+            ),
         }
