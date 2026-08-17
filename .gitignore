@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+models/
+metals_m1_usd_per_kg/
+*.joblib
+*.parquet
+.DS_Store
