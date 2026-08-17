@@ -135,4 +135,10 @@ def build_features(hourly: pd.DataFrame) -> pd.DataFrame:
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
     excluded = {"open", "high", "low", "close", "volume"}
-    return [c for c in df.columns if c not in excluded and not c.startswith("target_")]
+    return [
+        c
+        for c in df.columns
+        if c not in excluded
+        and not c.startswith("target_")
+        and not c.startswith("future_")
+    ]
