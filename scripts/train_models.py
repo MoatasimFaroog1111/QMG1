@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from qmg1.config import ProjectPaths, TrainingConfig  # noqa: E402
-from qmg1.modeling import train_all_horizons  # noqa: E402
+from qmg1.ml.artifacts import ModelArtifactRepository  # noqa: E402
+from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
 
 
 METAL_PATTERNS = {
@@ -21,14 +22,20 @@ METAL_PATTERNS = {
 
 
 def newest_matching(data_dir: Path, pattern: str) -> Path:
-    matches = sorted(data_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    matches = sorted(
+        data_dir.glob(pattern),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     if not matches:
         raise FileNotFoundError(f"No dataset matching {pattern} in {data_dir}")
     return matches[0]
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train and persist QMG1 metal forecasting models")
+    parser = argparse.ArgumentParser(
+        description="Train once, validate, and persist QMG1 forecasting models"
+    )
     parser.add_argument("--metal", choices=[*METAL_PATTERNS, "all"], default="all")
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--models-dir", type=Path, default=None)
@@ -37,19 +44,27 @@ def main() -> None:
     paths = ProjectPaths(ROOT)
     data_dir = args.data_dir or paths.data_dir
     models_dir = args.models_dir or paths.models_dir
-    selected = METAL_PATTERNS if args.metal == "all" else {args.metal: METAL_PATTERNS[args.metal]}
+    selected = (
+        METAL_PATTERNS
+        if args.metal == "all"
+        else {args.metal: METAL_PATTERNS[args.metal]}
+    )
 
-    cfg = TrainingConfig()
+    trainer = ForecastTrainer(
+        artifact_repository=ModelArtifactRepository(models_dir),
+        config=TrainingConfig(),
+    )
+
     for metal, pattern in selected.items():
         csv_path = newest_matching(data_dir, pattern)
-        output_dir = models_dir / metal
-        metrics = train_all_horizons(str(csv_path), output_dir, metal, cfg)
-        for m in metrics:
+        print(f"[DATA] {metal}: {csv_path}")
+        metrics = trainer.train_all(str(csv_path), metal)
+        for item in metrics:
             print(
-                f"[OK] {metal:10s} {m.horizon_hours:4d}h "
-                f"MAE={m.mae_usd_per_kg:.2f} USD/kg "
-                f"direction={m.directional_accuracy_pct:.2f}% "
-                f"vs_persistence={m.improvement_vs_persistence_pct:+.2f}%"
+                f"[OK] {metal:10s} {item.horizon_hours:4d}h "
+                f"MAE={item.mae_usd_per_kg:.2f} USD/kg "
+                f"direction={item.directional_accuracy_pct:.2f}% "
+                f"vs_persistence={item.improvement_vs_persistence_pct:+.2f}%"
             )
 
 
