@@ -23,7 +23,6 @@ class DirectDukascopyConfig:
     base_url: str = "https://datafeed.dukascopy.com/datafeed"
     timeframe: str = "m1"
     price_side: str = "bid"
-    decimal_factor: int = 1000
     timeout_seconds: int = 60
     max_attempts: int = 6
     base_backoff_seconds: float = 2.0
@@ -68,8 +67,6 @@ class DirectDukascopyM1Downloader:
             raise RuntimeError("DirectDukascopyM1Downloader supports only M1")
         if self.config.price_side not in {"bid", "ask"}:
             raise RuntimeError(f"Unsupported price side: {self.config.price_side}")
-        if self.config.decimal_factor <= 0:
-            raise RuntimeError("decimal_factor must be positive")
 
     def destination_path(self, metal: MetalSpec, start: date, end: date) -> Path:
         return (
@@ -174,8 +171,15 @@ class DirectDukascopyM1Downloader:
 
         raise RuntimeError(f"Unable to download {metal.name} M1 for {day}")
 
-    def decode_day(self, payload: bytes, day: date) -> list[tuple[object, ...]]:
+    def decode_day(
+        self,
+        payload: bytes,
+        day: date,
+        decimal_factor: int,
+    ) -> list[tuple[object, ...]]:
         """Decode one LZMA-compressed daily M1 BI5 payload."""
+        if decimal_factor <= 0:
+            raise ValueError("decimal_factor must be positive")
         try:
             decompressed = lzma.decompress(payload)
         except lzma.LZMAError as exc:
@@ -190,7 +194,7 @@ class DirectDukascopyM1Downloader:
         day_start_ms = int(
             datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp() * 1000
         )
-        factor = float(self.config.decimal_factor)
+        factor = float(decimal_factor)
         rows: list[tuple[object, ...]] = []
 
         for seconds, open_raw, close_raw, low_raw, high_raw, volume_raw in _M1_STRUCT.iter_unpack(
@@ -247,13 +251,14 @@ class DirectDukascopyM1Downloader:
                 if payload is None:
                     continue
 
-                rows = self.decode_day(payload, day)
+                rows = self.decode_day(payload, day, metal.dukascopy_decimal_factor)
                 for row in rows:
                     writer.writerow(row)
                 rows_written += len(rows)
-                days_with_data += 1
+                if rows:
+                    days_with_data += 1
 
-                if days_with_data % 25 == 0:
+                if days_with_data and days_with_data % 25 == 0:
                     print(
                         f"[BI5 ] {metal.name:10s} data_days={days_with_data:,} "
                         f"rows={rows_written:,} through={day}"
