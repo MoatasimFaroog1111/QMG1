@@ -65,9 +65,13 @@ def _adx(df: pd.DataFrame, period: int = 14) -> tuple[pd.Series, pd.Series, pd.S
 
 
 def _rolling_zscore(series: pd.Series, window: int) -> pd.Series:
-    mean = series.rolling(window, min_periods=window).mean()
-    std = series.rolling(window, min_periods=window).std().replace(0.0, np.nan)
-    return (series - mean) / std
+    rolling = series.rolling(window, min_periods=window)
+    mean = rolling.mean()
+    std = rolling.std()
+    zscore = (series - mean) / std.where(std.ne(0.0))
+    # A fully populated constant window carries no standardized signal, so its
+    # neutral z-score is 0. Preserve NaN only during the true warm-up period.
+    return zscore.mask(mean.notna() & std.eq(0.0), 0.0)
 
 
 def load_m1_csv(path: str) -> pd.DataFrame:
