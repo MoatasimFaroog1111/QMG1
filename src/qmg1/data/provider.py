@@ -26,6 +26,15 @@ class HistoricalM1Provider(Protocol):
 
     def validate_runtime(self) -> None: ...
 
+    def chunk_ranges(
+        self,
+        metal: MetalSpec,
+        start: date,
+        end: date,
+    ) -> list[tuple[date, date]]:
+        """Return preferred provider download ranges covering [start, end)."""
+        ...
+
     def download(self, metal: MetalSpec, start: date, end: date) -> Path:
         """Return a provider-native CSV for [start, end)."""
         ...
