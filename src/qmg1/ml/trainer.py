@@ -9,6 +9,7 @@ from qmg1.config import HORIZONS_HOURS, TrainingConfig
 from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.dataset import FeatureBase, ForecastDatasetBuilder, PreparedDataset
 from qmg1.ml.evaluation import HorizonMetrics
+from qmg1.ml.model_factory import apply_training_lookback
 from qmg1.ml.selection import ChampionChallengerSelector
 
 
@@ -47,24 +48,34 @@ class ForecastTrainer:
             horizon_hours,
         )
 
-        final_model = winning_factory.create()
         target_col = f"target_{horizon_hours}h"
-        final_model.fit(frame[features], frame[target_col])
+        final_reference = frame.index[-1]
+        final_train = apply_training_lookback(
+            winning_factory,
+            frame,
+            final_reference,
+        )
+        if final_train.empty:
+            raise ValueError("Final challenger training window is empty")
+
+        final_model = winning_factory.create()
+        final_model.fit(final_train[features], final_train[target_col])
 
         active_metrics = selection.active_holdout_metrics
         artifact = {
-            "schema_version": 4,
+            "schema_version": 5,
             "metal": metal,
             "horizon_hours": horizon_hours,
             "feature_columns": features,
             "trained_at_utc": datetime.now(timezone.utc).isoformat(),
-            "training_rows": len(frame),
-            "training_start_utc": frame.index[0].isoformat(),
-            "training_end_utc": frame.index[-1].isoformat(),
+            "training_rows": len(final_train),
+            "training_start_utc": final_train.index[0].isoformat(),
+            "training_end_utc": final_train.index[-1].isoformat(),
+            "candidate_training_lookback_days": winning_factory.lookback_days,
             "training_config": asdict(self.config),
             "validation_method": (
                 "development walk-forward selection + untouched 20% holdout "
-                "with target-time purge"
+                "with target-time purge and fixed recency challengers"
             ),
             "active_strategy": selection.active_strategy,
             "selected_challenger": selection.selected_model_name,
@@ -100,10 +111,31 @@ class ForecastTrainer:
             raise ValueError(f"Unsupported forecast horizons: {unknown}")
 
         metrics: list[HorizonMetrics] = []
+        horizon_status: list[dict[str, object]] = []
         for horizon in requested_horizons:
             print(f"[TRAIN] {metal} horizon={horizon}h")
             prepared = self.dataset_builder.build_from_base(base, horizon)
-            metrics.append(self._train_prepared(prepared, metal))
+            horizon_metrics = self._train_prepared(prepared, metal)
+            metrics.append(horizon_metrics)
+
+            artifact = self.artifact_repository.load(metal, horizon)
+            selection = artifact["selection"]
+            horizon_status.append(
+                {
+                    "horizon_hours": horizon,
+                    "active_strategy": artifact["active_strategy"],
+                    "selected_challenger": artifact["selected_challenger"],
+                    "candidate_training_lookback_days": artifact[
+                        "candidate_training_lookback_days"
+                    ],
+                    "development_qualified": selection["development_qualified"],
+                    "holdout_qualified": selection["holdout_qualified"],
+                    "promotion_threshold_pct": selection[
+                        "promotion_threshold_pct"
+                    ],
+                    "active_improvement_vs_persistence_pct": horizon_metrics.improvement_vs_persistence_pct,
+                }
+            )
 
         report_dir = self.artifact_repository.root / metal
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -114,9 +146,10 @@ class ForecastTrainer:
             "horizons_hours": list(requested_horizons),
             "validation_method": (
                 "development walk-forward champion/challenger selection + "
-                "untouched 20% holdout"
+                "untouched 20% holdout + dual promotion gate"
             ),
             "feature_base_reused_across_horizons": True,
+            "horizon_status": horizon_status,
             "metrics": [asdict(item) for item in metrics],
         }
         (report_dir / f"{metal}_training_report.json").write_text(
