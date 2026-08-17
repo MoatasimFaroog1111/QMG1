@@ -10,6 +10,11 @@ BASE_PRICE_COLUMNS = [
     "low_usd_per_kg",
     "close_usd_per_kg",
 ]
+MODEL_INPUT_COLUMNS = [
+    "timestamp_utc",
+    *BASE_PRICE_COLUMNS,
+    "volume_source_units",
+]
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -71,10 +76,22 @@ def _rolling_zscore(series: pd.Series, window: int) -> pd.Series:
 
 
 def load_m1_csv(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, parse_dates=["timestamp_utc"])
-    missing = [column for column in BASE_PRICE_COLUMNS if column not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+    """Load only the columns required by the modeling pipeline.
+
+    Normalized historical files intentionally carry provenance metadata, but
+    millions of repeated string values are unnecessary during training. Using
+    ``usecols`` materially lowers peak memory without changing model inputs.
+    """
+    try:
+        df = pd.read_csv(
+            path,
+            usecols=MODEL_INPUT_COLUMNS,
+            parse_dates=["timestamp_utc"],
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"Dataset is missing one or more required modeling columns: {path}"
+        ) from exc
 
     df = df.set_index("timestamp_utc").sort_index()
     df = df[~df.index.duplicated(keep="last")]
@@ -82,12 +99,10 @@ def load_m1_csv(path: str) -> pd.DataFrame:
     for column in BASE_PRICE_COLUMNS:
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    if "volume_source_units" in df.columns:
-        df["volume_source_units"] = pd.to_numeric(
-            df["volume_source_units"], errors="coerce"
-        )
-    else:
-        df["volume_source_units"] = 0.0
+    df["volume_source_units"] = pd.to_numeric(
+        df["volume_source_units"],
+        errors="coerce",
+    ).fillna(0.0)
 
     return df.dropna(subset=BASE_PRICE_COLUMNS)
 
