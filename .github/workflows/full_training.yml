@@ -49,18 +49,24 @@ jobs:
       - name: Download M1 and compact to H1 USD per kg
         run: python scripts/prepare_hourly_training_data.py --metal "$METAL" --cleanup-raw
 
+      - name: Preserve hourly training dataset
+        uses: actions/upload-artifact@v4
+        with:
+          name: qmg1-${{ env.METAL }}-hourly-${{ github.run_id }}
+          path: training_data/hourly/*.csv
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Train all requested horizons
         run: python scripts/train_hourly_models.py --metal "$METAL"
 
       - name: Show training report
         run: cat "models/$METAL/${METAL}_training_report.json"
 
-      - name: Upload hourly data and persisted models
+      - name: Upload persisted models and report
         uses: actions/upload-artifact@v4
         with:
-          name: qmg1-${{ env.METAL }}-${{ github.run_id }}
-          path: |
-            training_data/hourly/*.csv
-            models/${{ env.METAL }}/
+          name: qmg1-${{ env.METAL }}-models-${{ github.run_id }}
+          path: models/${{ env.METAL }}/
           if-no-files-found: error
           retention-days: 14
