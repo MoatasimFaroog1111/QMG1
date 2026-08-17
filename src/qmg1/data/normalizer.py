@@ -18,6 +18,7 @@ PRICE_QUANT = Decimal("0.000001")
 @dataclass
 class NormalizationReport:
     metal: str
+    source: str | None = None
     rows_written: int = 0
     duplicates_skipped: int = 0
     malformed_skipped: int = 0
@@ -52,7 +53,7 @@ def _timestamp_ms(value: str) -> int:
 
 
 class UsdPerKgNormalizer:
-    """Normalize source OHLC values from USD/troy ounce to USD/kg."""
+    """Normalize provider-neutral OHLC values from USD/troy ounce to USD/kg."""
 
     def __init__(self, output_root: Path, price_side: str = "bid") -> None:
         self.output_root = output_root
@@ -63,14 +64,20 @@ class UsdPerKgNormalizer:
         metal: MetalSpec,
         files: list[Path],
         end_inclusive: str,
+        source_name: str = "Dukascopy",
+        start_inclusive: str | None = None,
     ) -> NormalizationReport:
         self.output_root.mkdir(parents=True, exist_ok=True)
+        start_label = start_inclusive or metal.effective_start.isoformat()
         output = self.output_root / (
-            f"{metal.output_symbol}_M1_USD_PER_KG_"
-            f"{metal.effective_start.isoformat()}_to_{end_inclusive}.csv"
+            f"{metal.output_symbol}_M1_USD_PER_KG_{start_label}_to_{end_inclusive}.csv"
         )
 
-        report = NormalizationReport(metal=metal.name, output_file=str(output))
+        report = NormalizationReport(
+            metal=metal.name,
+            source=source_name,
+            output_file=str(output),
+        )
         last_timestamp: int | None = None
 
         with output.open("w", encoding="utf-8", newline="") as out_handle:
@@ -110,10 +117,7 @@ class UsdPerKgNormalizer:
                         }
                         try:
                             timestamp = _timestamp_ms(row["timestamp"])
-                            if (
-                                last_timestamp is not None
-                                and timestamp <= last_timestamp
-                            ):
+                            if last_timestamp is not None and timestamp <= last_timestamp:
                                 report.duplicates_skipped += 1
                                 continue
 
@@ -143,7 +147,7 @@ class UsdPerKgNormalizer:
                                     "volume_source_units": row.get("volume", ""),
                                     "metal": metal.name,
                                     "source_symbol": metal.source_symbol,
-                                    "source": "Dukascopy",
+                                    "source": source_name,
                                     "price_side": self.price_side,
                                     "price_unit": "USD/kg",
                                 }
