@@ -9,7 +9,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
 
 from qmg1.config import TrainingConfig
-from qmg1.ml.model_factory import RegressorFactory
+from qmg1.ml.model_factory import RegressorFactory, apply_training_lookback
 
 
 @dataclass(frozen=True)
@@ -83,7 +83,7 @@ def score_predictions(
 
 
 class WalkForwardEvaluator:
-    """Expanding walk-forward evaluation with target-time purging."""
+    """Walk-forward evaluation with target-time purge and optional recency window."""
 
     def __init__(self, config: TrainingConfig, model_factory: RegressorFactory) -> None:
         self.config = config
@@ -114,9 +114,14 @@ class WalkForwardEvaluator:
                 continue
 
             validation_start = valid.index[0]
-            train = candidate_train[
+            purged_train = candidate_train[
                 candidate_train[target_timestamp_col] < validation_start
             ]
+            train = apply_training_lookback(
+                self.model_factory,
+                purged_train,
+                validation_start,
+            )
             if train.empty:
                 continue
 
@@ -142,7 +147,8 @@ class WalkForwardEvaluator:
                 f"  [CV {fold}/{self.config.cv_splits}] "
                 f"model={self.model_factory.name} "
                 f"train={len(train):,} validation={len(valid):,} "
-                f"purged={len(candidate_train) - len(train):,}"
+                f"purged={len(candidate_train) - len(purged_train):,} "
+                f"lookback_days={self.model_factory.lookback_days or 'all'}"
             )
 
         if not predicted_close_parts:
