@@ -41,6 +41,12 @@ def main() -> None:
     parser.add_argument("--horizon", type=int, choices=HORIZONS_HOURS, required=True)
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--models-dir", type=Path, default=None)
+    parser.add_argument(
+        "--gold-hourly",
+        type=Path,
+        default=None,
+        help="Gold H1 CSV required only when the active silver champion uses gold features.",
+    )
     args = parser.parse_args()
 
     paths = ProjectPaths(ROOT)
@@ -48,11 +54,16 @@ def main() -> None:
     models_dir = args.models_dir or paths.models_dir
     csv_path = newest_matching(data_dir, METAL_PATTERNS[args.metal])
 
+    exogenous_paths = None
+    if args.gold_hourly is not None:
+        exogenous_paths = {"gold": str(args.gold_hourly)}
+
     predictor = ForecastPredictor(ModelArtifactRepository(models_dir))
     result = predictor.predict_latest(
         csv_path=str(csv_path),
         metal=args.metal,
         horizon_hours=args.horizon,
+        exogenous_csv_paths=exogenous_paths,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 

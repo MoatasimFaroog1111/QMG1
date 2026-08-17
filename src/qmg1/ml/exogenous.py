@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Protocol
+
+import numpy as np
+import pandas as pd
+
+
+GOLD_SILVER_PROVIDER_NAME = "gold_silver_cross_market"
+CROSS_MARKET_HORIZONS: tuple[int, ...] = (1, 4, 24, 72, 168)
+
+
+class ExogenousFeatureProvider(Protocol):
+    name: str
+
+    def augment(
+        self,
+        features: pd.DataFrame,
+        target_hourly: pd.DataFrame,
+    ) -> pd.DataFrame:
+        ...
+
+    def metadata(self) -> dict[str, object]:
+        ...
+
+
+def _calendar_log_return(series: pd.Series, horizon_hours: int) -> pd.Series:
+    """Causal log return versus the last observation at/before t - horizon."""
+    clean = pd.to_numeric(series, errors="coerce").dropna().sort_index()
+    if clean.empty:
+        return pd.Series(index=series.index, dtype=float)
+
+    left = pd.DataFrame(
+        {
+            "_position": np.arange(len(clean)),
+            "_query_time": clean.index - pd.Timedelta(hours=horizon_hours),
+        }
+    ).sort_values("_query_time")
+    right = pd.DataFrame(
+        {
+            "_source_time": clean.index,
+            "_lag_price": clean.to_numpy(dtype=float),
+        }
+    ).sort_values("_source_time")
+    matched = pd.merge_asof(
+        left,
+        right,
+        left_on="_query_time",
+        right_on="_source_time",
+        direction="backward",
+        allow_exact_matches=True,
+    ).sort_values("_position")
+
+    current = clean.to_numpy(dtype=float)
+    lagged = matched["_lag_price"].to_numpy(dtype=float)
+    values = np.log(current) - np.log(lagged)
+    result = pd.Series(values, index=clean.index, dtype=float)
+    return result.reindex(series.index)
+
+
+def _rolling_zscore(series: pd.Series, window_hours: int) -> pd.Series:
+    window = f"{window_hours}h"
+    minimum = max(4, min(24, window_hours // 2))
+    mean = series.rolling(window, min_periods=minimum).mean()
+    std = series.rolling(window, min_periods=minimum).std()
+    zscore = (series - mean) / std.replace(0.0, np.nan)
+    ready = mean.notna() & std.eq(0.0)
+    return zscore.mask(ready, 0.0)
+
+
+class GoldSilverFeatureProvider:
+    """Causal XAU/USD context for a silver target series.
+
+    Gold features are computed on the gold clock first, then aligned to each
+    silver timestamp with a backward as-of join. No future gold quote can enter
+    a silver feature row.
+    """
+
+    name = GOLD_SILVER_PROVIDER_NAME
+
+    def __init__(self, gold_hourly: pd.DataFrame, source_file: str = "") -> None:
+        required = {"close"}
+        missing = sorted(required.difference(gold_hourly.columns))
+        if missing:
+            raise ValueError(f"Missing gold hourly columns: {missing}")
+
+        frame = gold_hourly.copy().sort_index()
+        frame = frame[~frame.index.duplicated(keep="last")]
+        frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+        frame = frame.dropna(subset=["close"])
+        if frame.empty:
+            raise ValueError("Gold hourly dataset has no usable close prices")
+
+        if frame.index.tz is None:
+            frame.index = pd.DatetimeIndex(frame.index).tz_localize("UTC")
+        else:
+            frame.index = pd.DatetimeIndex(frame.index).tz_convert("UTC")
+
+        self.gold_hourly = frame
+        self.source_file = source_file
+
+    @classmethod
+    def from_hourly_csv(cls, path: str | Path) -> "GoldSilverFeatureProvider":
+        source = Path(path)
+        frame = pd.read_csv(source, parse_dates=["timestamp_utc"])
+        frame = frame.set_index("timestamp_utc").sort_index()
+        return cls(frame, source_file=source.name)
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "source_symbol": "XAU/USD",
+            "source_file": self.source_file,
+            "alignment": "backward_asof",
+            "future_quotes_allowed": False,
+        }
+
+    def _gold_features(self) -> pd.DataFrame:
+        close = self.gold_hourly["close"]
+        gold = pd.DataFrame(index=close.index)
+        gold["gold_close_usd_per_kg"] = close
+        for horizon in CROSS_MARKET_HORIZONS:
+            gold[f"gold_log_return_{horizon}h"] = _calendar_log_return(
+                close, horizon
+            )
+        gold["gold_close_zscore_24h"] = _rolling_zscore(close, 24)
+        gold["gold_close_zscore_168h"] = _rolling_zscore(close, 168)
+        return gold
+
+    def augment(
+        self,
+        features: pd.DataFrame,
+        target_hourly: pd.DataFrame,
+    ) -> pd.DataFrame:
+        if features.empty or target_hourly.empty:
+            return features.copy()
+
+        target = target_hourly.copy().sort_index()
+        target = target[~target.index.duplicated(keep="last")]
+        if target.index.tz is None:
+            target.index = pd.DatetimeIndex(target.index).tz_localize("UTC")
+        else:
+            target.index = pd.DatetimeIndex(target.index).tz_convert("UTC")
+
+        left = pd.DataFrame({"_target_time": target.index})
+        right_features = self._gold_features()
+        right = right_features.copy()
+        right["_gold_time"] = right.index
+        right = right.reset_index(drop=True)
+
+        aligned = pd.merge_asof(
+            left.sort_values("_target_time"),
+            right.sort_values("_gold_time"),
+            left_on="_target_time",
+            right_on="_gold_time",
+            direction="backward",
+            allow_exact_matches=True,
+        )
+        aligned.index = target.index
+
+        result = features.reindex(target.index).copy()
+        numeric_columns = [
+            column
+            for column in aligned.columns
+            if column not in {"_target_time", "_gold_time"}
+        ]
+        for column in numeric_columns:
+            result[column] = pd.to_numeric(aligned[column], errors="coerce").to_numpy()
+
+        gold_time = pd.to_datetime(aligned["_gold_time"], utc=True, errors="coerce")
+        target_time = pd.Series(target.index, index=target.index)
+        gold_time.index = target.index
+        result["gold_source_age_hours"] = (
+            target_time - gold_time
+        ).dt.total_seconds() / 3600.0
+
+        silver_close = pd.to_numeric(target["close"], errors="coerce")
+        ratio = result["gold_close_usd_per_kg"] / silver_close
+        result["gold_silver_ratio"] = ratio
+        result["gold_silver_ratio_zscore_24h"] = _rolling_zscore(ratio, 24)
+        result["gold_silver_ratio_zscore_168h"] = _rolling_zscore(ratio, 168)
+
+        for horizon in CROSS_MARKET_HORIZONS:
+            ratio_return = _calendar_log_return(ratio, horizon)
+            silver_return = _calendar_log_return(silver_close, horizon)
+            result[f"gold_silver_ratio_log_return_{horizon}h"] = ratio_return
+            result[f"gold_minus_silver_return_{horizon}h"] = (
+                result[f"gold_log_return_{horizon}h"] - silver_return
+            )
+
+        return result.replace([np.inf, -np.inf], np.nan)

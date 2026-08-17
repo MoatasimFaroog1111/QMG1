@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pandas as pd
 
 from qmg1.data.hourly import HOURLY_COLUMNS
 from qmg1.features import build_features, feature_columns, load_m1_csv, resample_to_hourly
+from qmg1.ml.exogenous import ExogenousFeatureProvider
 from qmg1.ml.targets import CalendarHorizonTargetBuilder
 
 
@@ -23,14 +25,28 @@ class PreparedDataset:
 
 
 class ForecastDatasetBuilder:
-    def __init__(self, target_builder: CalendarHorizonTargetBuilder | None = None) -> None:
+    def __init__(
+        self,
+        target_builder: CalendarHorizonTargetBuilder | None = None,
+        exogenous_providers: Sequence[ExogenousFeatureProvider] = (),
+    ) -> None:
         self.target_builder = target_builder or CalendarHorizonTargetBuilder()
+        self.exogenous_providers = tuple(exogenous_providers)
+
+    def exogenous_metadata(self) -> list[dict[str, object]]:
+        return [provider.metadata() for provider in self.exogenous_providers]
+
+    def _build_features(self, hourly: pd.DataFrame) -> pd.DataFrame:
+        features = build_features(hourly)
+        for provider in self.exogenous_providers:
+            features = provider.augment(features, hourly)
+        return features
 
     def load_feature_base(self, csv_path: str) -> FeatureBase:
         """Load normalized M1 data and build the reusable hourly feature base."""
         m1 = load_m1_csv(csv_path)
         hourly = resample_to_hourly(m1)
-        features = build_features(hourly)
+        features = self._build_features(hourly)
         return FeatureBase(hourly=hourly, features=features)
 
     def load_hourly_feature_base(self, csv_path: str) -> FeatureBase:
@@ -45,7 +61,7 @@ class ForecastDatasetBuilder:
         for column in HOURLY_COLUMNS:
             hourly[column] = pd.to_numeric(hourly[column], errors="coerce")
         hourly = hourly.dropna(subset=["open", "high", "low", "close"])
-        features = build_features(hourly)
+        features = self._build_features(hourly)
         return FeatureBase(hourly=hourly, features=features)
 
     def build_from_base(

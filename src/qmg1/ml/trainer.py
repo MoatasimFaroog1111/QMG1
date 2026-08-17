@@ -63,7 +63,7 @@ class ForecastTrainer:
 
         active_metrics = selection.active_holdout_metrics
         artifact = {
-            "schema_version": 5,
+            "schema_version": 6,
             "metal": metal,
             "horizon_hours": horizon_hours,
             "feature_columns": features,
@@ -75,8 +75,10 @@ class ForecastTrainer:
             "training_config": asdict(self.config),
             "validation_method": (
                 "development walk-forward selection + untouched 20% holdout "
-                "with target-time purge and fixed recency challengers"
+                "with target-time purge, fixed recency challengers, and "
+                "causal exogenous alignment"
             ),
+            "exogenous_features": self.dataset_builder.exogenous_metadata(),
             "active_strategy": selection.active_strategy,
             "selected_challenger": selection.selected_model_name,
             "selection": selection.to_dict(),
@@ -133,7 +135,9 @@ class ForecastTrainer:
                     "promotion_threshold_pct": selection[
                         "promotion_threshold_pct"
                     ],
-                    "active_improvement_vs_persistence_pct": horizon_metrics.improvement_vs_persistence_pct,
+                    "active_improvement_vs_persistence_pct": (
+                        horizon_metrics.improvement_vs_persistence_pct
+                    ),
                 }
             )
 
@@ -149,6 +153,7 @@ class ForecastTrainer:
                 "untouched 20% holdout + dual promotion gate"
             ),
             "feature_base_reused_across_horizons": True,
+            "exogenous_features": self.dataset_builder.exogenous_metadata(),
             "horizon_status": horizon_status,
             "metrics": [asdict(item) for item in metrics],
         }

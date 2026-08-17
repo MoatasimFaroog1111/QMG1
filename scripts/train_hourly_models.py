@@ -10,6 +10,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from qmg1.config import HORIZONS_HOURS, TrainingConfig  # noqa: E402
 from qmg1.ml.artifacts import ModelArtifactRepository  # noqa: E402
+from qmg1.ml.dataset import ForecastDatasetBuilder  # noqa: E402
+from qmg1.ml.exogenous import GoldSilverFeatureProvider  # noqa: E402
 from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
 
 
@@ -32,6 +34,17 @@ def newest_matching(data_dir: Path, pattern: str) -> Path:
     return matches[0]
 
 
+def dataset_builder_for(metal: str, data_dir: Path) -> ForecastDatasetBuilder:
+    if metal != "silver":
+        return ForecastDatasetBuilder()
+
+    gold_csv = newest_matching(data_dir, PATTERNS["gold"])
+    print(f"[EXOG] silver <- gold {gold_csv.name}")
+    return ForecastDatasetBuilder(
+        exogenous_providers=[GoldSilverFeatureProvider.from_hourly_csv(gold_csv)]
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Train and persist QMG1 models from compact H1 datasets"
@@ -51,6 +64,7 @@ def main() -> None:
     trainer = ForecastTrainer(
         artifact_repository=ModelArtifactRepository(args.models_dir),
         config=TrainingConfig(),
+        dataset_builder=dataset_builder_for(args.metal, args.data_dir),
     )
     metrics = trainer.train_all_hourly(
         str(csv_path),
