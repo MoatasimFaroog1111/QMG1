@@ -1,10 +1,10 @@
 # QMG1 — Precious Metals Forecasting Foundation
 
-QMG1 is a modular forecasting foundation for precious-metal prices normalized to **USD per kilogram**. It separates market-data acquisition, unit normalization, technical feature engineering, model training, out-of-sample validation, artifact persistence, and inference.
+QMG1 is a modular forecasting foundation for precious-metal prices normalized to **USD per kilogram**. It separates market-data acquisition, unit normalization, technical feature engineering, target construction, out-of-sample validation, model persistence, training, and inference.
 
 ## Forecast horizons
 
-The project currently trains one persisted model per metal and horizon:
+One persisted model is trained per metal and horizon:
 
 - 2 hours
 - 4 hours
@@ -16,20 +16,24 @@ The project currently trains one persisted model per metal and horizon:
 - 15 days = 360 hours
 - 30 days = 720 hours
 
-## Metals and data coverage
+## Metals and historical sources
 
-The data pipeline uses Dukascopy through `dukascopy-node@1.50.0` and requests M1 Bid OHLC plus source volume.
+The default pipeline uses a **hybrid provider** behind one `HistoricalM1Provider` boundary:
 
-- Gold — XAU/USD — requested from 2009-05-01
-- Silver — XAG/USD — requested from 2009-05-01
-- Palladium — XPD.CMD/USD — configured from its available M1 history beginning 2021-07-04
-- Platinum — XPT.CMD/USD — configured from its available M1 history beginning 2021-11-01
+- Gold — XAU/USD — HistData Generic ASCII M1 bulk archives — requested from 2009-05-01
+- Silver — XAG/USD — HistData Generic ASCII M1 bulk archives — requested from 2009-05-01
+- Palladium — XPD.CMD/USD — direct Dukascopy M1 BI5 — available from 2021-07-04
+- Platinum — XPT.CMD/USD — direct Dukascopy M1 BI5 — available from 2021-11-01
 
-The requested end is August 2026. When run before 2026-09-01, the downloader stops at the latest completed UTC day. Re-running resumes existing yearly chunks rather than downloading valid files again.
+Both verified paths use Bid OHLC. HistData timestamps are fixed EST without DST and are converted to UTC before normalization. Dukascopy BI5 files are downloaded directly in Python, LZMA-decoded, parsed as big-endian M1 records, and cached per day.
+
+Gold and Silver are downloaded as HistData annual/monthly bulk archives. Palladium and Platinum use bounded yearly Dukascopy ranges with resumable day-level BI5 caches. This keeps the bulk path fast while retaining a direct source for metals not covered by HistData.
+
+The configured end is August 2026. Before 2026-09-01, the pipeline stops at the latest completed UTC day rather than pretending the unfinished month is complete.
 
 ## Price unit
 
-Source metal prices are treated as USD per troy ounce and normalized as:
+Source metal prices are interpreted as USD per troy ounce and normalized as:
 
 ```text
 1 troy ounce = 31.1034768 grams
@@ -37,47 +41,54 @@ Source metal prices are treated as USD per troy ounce and normalized as:
 USD/kg = USD/troy_ounce × 32.15074656862798...
 ```
 
-The final M1 CSV files contain `open_usd_per_kg`, `high_usd_per_kg`, `low_usd_per_kg`, and `close_usd_per_kg`.
+The final M1 files contain `open_usd_per_kg`, `high_usd_per_kg`, `low_usd_per_kg`, and `close_usd_per_kg`, plus provenance metadata.
 
 ## Architecture
 
 ```text
 scripts/
-  download_all_metals_m1_usd_per_kg.py  -> thin data-pipeline entrypoint
-  train_models.py                        -> train once + persist
-  predict.py                             -> load persisted model + predict
+  download_all_metals_m1_usd_per_kg.py  -> acquisition + normalization CLI
+  train_models.py                        -> train once + persist, resume-safe
+  predict.py                             -> load persisted model + predict only
+  live_smoke_test.py                     -> real Dukascopy BI5 source smoke
+  histdata_smoke_test.py                 -> real HistData bulk source smoke
 
 src/qmg1/
   config.py
   features.py                            -> causal technical-analysis features
   data/
-    metals.py                            -> metal catalog / coverage
-    dukascopy.py                         -> data-source adapter
-    normalizer.py                        -> USD/troy oz -> USD/kg
+    provider.py                          -> historical M1 provider contract
+    metals.py                            -> metal catalog / availability
+    histdata.py                          -> XAU/XAG bulk provider
+    dukascopy_direct.py                  -> direct BI5 provider + cache
+    hybrid.py                            -> per-metal provider routing
+    normalizer.py                        -> provider-neutral USD/troy oz -> USD/kg
     pipeline.py                          -> acquisition orchestration
   ml/
     model_factory.py                     -> replaceable regressor factory
     targets.py                           -> real elapsed-time targets
-    dataset.py                           -> dataset assembly
+    dataset.py                           -> reusable feature base + targets
     evaluation.py                        -> walk-forward OOS evaluation + purge
     artifacts.py                         -> model persistence boundary
     trainer.py                           -> Train Once -> Persist
     predictor.py                         -> Load -> Predict only
 ```
 
-This keeps responsibilities separate so the data source, regressor, persistence layer, or feature set can be replaced without rewriting unrelated components.
+The older `dukascopy.py` CLI adapter is retained as an optional compatibility adapter, but it is not the default historical path.
 
 ## Technical features
 
-The hourly modeling layer is derived from M1 data and currently includes multi-scale log momentum, moving-average ratios, rolling z-scores, realized volatility, rolling range/position, EMA 12/26/50/200, MACD, RSI, ATR, ADX/+DI/-DI, stochastic oscillator, Bollinger position/width, candle body/wicks/range, source-volume transforms, minute coverage, and hour/day cyclical features.
+The modeling layer resamples M1 to hourly OHLC and builds causal features including multi-scale log momentum, moving-average ratios, rolling z-scores, realized volatility, rolling range/position, EMA 12/26/50/200, MACD, RSI, ATR, ADX/+DI/-DI, stochastic oscillator, Bollinger position/width, candle body/wicks/range, source-volume transforms, minute coverage, and hour/day cyclical features.
 
-All feature calculations use information available at or before each feature timestamp. Target/future columns are explicitly excluded from the model feature list.
+All feature calculations use information available at or before each feature timestamp. Target/future columns are explicitly excluded from the model feature list. Large normalized CSV files are loaded with only the six columns required by modeling to reduce peak memory.
 
 ## Leakage-safe targets and validation
 
 Forecast targets use **real elapsed UTC time**, not `shift(N rows)`. If a requested target timestamp lands during a market closure, the first available quote at or after that requested time is used within a bounded tolerance.
 
-Model validation uses expanding walk-forward splits. Before each validation fold, training samples whose future target timestamp reaches the validation period are purged. Metrics include:
+Model validation uses expanding walk-forward splits. Before each validation fold, training samples whose future target timestamp reaches the validation period are purged. The model factory disables sklearn's internal random early-stopping split so time-series validation remains under QMG1 control.
+
+Metrics include:
 
 - MAE in USD/kg
 - RMSE in USD/kg
@@ -93,31 +104,40 @@ The residual percentiles are used to provide an empirical 80% prediction interva
 
 Training and inference are intentionally separate. `predict.py` never retrains a model.
 
-Persisted artifacts contain the trained estimator, exact feature column list, horizon, training range, training configuration, and out-of-sample metrics.
+Persisted artifacts contain the trained estimator, exact feature schema, horizon, training range, training configuration, validation method, and out-of-sample metrics.
+
+Feature engineering is performed once per metal and reused across all requested horizons. Training is resume-safe: an existing horizon artifact is skipped unless `--force` is supplied.
 
 ## GitHub Codespaces
 
-From the repository root:
+Python 3.12 is the tested runtime. The default data pipeline does **not** require Node.js.
 
-```bash
-python --version
-node --version
-npm --version
-```
-
-Python 3.10+ is recommended and Node.js 18+ is required by the selected downloader.
-
-Install Python dependencies:
+Install dependencies:
 
 ```bash
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Download and normalize the data:
+Download and normalize all configured metals:
 
 ```bash
 python scripts/download_all_metals_m1_usd_per_kg.py
+```
+
+Download only Silver:
+
+```bash
+python scripts/download_all_metals_m1_usd_per_kg.py --metal silver
+```
+
+Use an explicit UTC range when needed; `--end` is exclusive:
+
+```bash
+python scripts/download_all_metals_m1_usd_per_kg.py \
+  --metal silver \
+  --start 2026-07-01 \
+  --end 2026-08-01
 ```
 
 Generated datasets are written under:
@@ -137,33 +157,47 @@ Train every metal and every requested horizon:
 python scripts/train_models.py --metal all
 ```
 
-Or train a single metal:
+Train or resume Silver only:
 
 ```bash
 python scripts/train_models.py --metal silver
 ```
 
-Persisted model artifacts are stored under `models/<metal>/` and are also ignored by Git.
+Train a subset of Silver horizons:
 
-Predict silver two hours ahead:
+```bash
+python scripts/train_models.py --metal silver --horizon 2 4 8 12 24
+```
+
+Force retraining when deliberately replacing persisted artifacts:
+
+```bash
+python scripts/train_models.py --metal silver --force
+```
+
+Persisted model artifacts are stored under `models/<metal>/` and are ignored by Git.
+
+Predict Silver two hours ahead:
 
 ```bash
 python scripts/predict.py --metal silver --horizon 2
 ```
 
-Predict gold 15 days ahead:
+Predict Gold 15 days ahead:
 
 ```bash
 python scripts/predict.py --metal gold --horizon 360
 ```
 
-Predict platinum 30 days ahead:
+Predict Platinum 30 days ahead:
 
 ```bash
 python scripts/predict.py --metal platinum --horizon 720
 ```
 
-## Quality checks
+## Verification
+
+Static and integration checks:
 
 ```bash
 pip install -r requirements-dev.txt
@@ -172,8 +206,13 @@ python -m compileall -q src scripts tests
 pytest -q
 ```
 
-The same checks run in GitHub Actions.
+GitHub Actions also runs live-source smoke tests against both verified data paths:
+
+- direct Dukascopy BI5 -> provider CSV -> USD/kg
+- HistData bulk ZIP -> provider CSV -> USD/kg
+
+The test suite additionally exercises Train -> Persist -> Load -> Predict without requiring an external market source.
 
 ## Important modeling note
 
-A backtest metric is not evidence that a future market price is certain. QMG1 records performance against a persistence baseline and exposes uncertainty information so model quality can be evaluated before any forecast is used operationally.
+A backtest metric is not evidence that a future market price is certain. QMG1 benchmarks against a persistence baseline and exposes uncertainty information so model quality can be evaluated before any forecast is treated as operationally useful.
