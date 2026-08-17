@@ -14,7 +14,9 @@ on:
           - palladium
           - platinum
   push:
-    branches: ["agent/metals-ml-foundation"]
+    branches:
+      - "agent/metals-ml-foundation"
+      - "agent/full-training-execution"
     paths:
       - ".github/triggers/full-training"
 
