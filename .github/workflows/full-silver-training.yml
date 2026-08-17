@@ -1,0 +1,99 @@
+name: Full Silver Historical Training
+
+on:
+  push:
+    branches: ["agent/metals-ml-foundation"]
+
+concurrency:
+  group: full-silver-training
+  cancel-in-progress: false
+
+# Full-run revision: candidate-selector-v1-benchmark
+jobs:
+  full-silver:
+    if: contains(github.event.head_commit.message, '[full-silver]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Show runner capacity
+        run: |
+          python --version
+          free -h
+          df -h .
+
+      - name: Download and normalize full Silver M1 history
+        run: |
+          python scripts/download_all_metals_m1_usd_per_kg.py --metal silver
+          echo "--- final dataset size ---"
+          du -sh metals_m1_usd_per_kg || true
+          ls -lh metals_m1_usd_per_kg/final/ || true
+          cat metals_m1_usd_per_kg/download_report.json
+
+      - name: Benchmark candidates and train selected Silver models
+        run: |
+          python scripts/train_models.py --metal silver
+          echo "--- persisted model files ---"
+          find models/silver -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+          cat models/silver/silver_training_report.json
+
+      - name: Generate persisted-model predictions in one feature pass
+        run: |
+          mkdir -p run_reports
+          python scripts/predict.py \
+            --metal silver \
+            --horizon 2 4 8 12 24 72 168 360 720 \
+            --allow-rejected \
+            | tee run_reports/silver_all_predictions.json
+
+      - name: Record run manifest
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          import json
+          import platform
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          manifest = {
+              "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+              "python": platform.python_version(),
+              "metal": "silver",
+              "forecast_horizons_hours": [2, 4, 8, 12, 24, 72, 168, 360, 720],
+              "data_report": "metals_m1_usd_per_kg/download_report.json",
+              "training_report": "models/silver/silver_training_report.json",
+              "predictions": "run_reports/silver_all_predictions.json",
+              "prediction_mode": "batch feature pass; rejected models shown only for research diagnostics",
+              "candidate_policy": "persistence + Ridge + full/recent HistGradientBoosting; robust overall/recent selection",
+          }
+          Path("run_reports/full_silver_manifest.json").write_text(
+              json.dumps(manifest, indent=2), encoding="utf-8"
+          )
+          PY
+
+      - name: Upload Silver models and reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: qmg1-silver-models-and-reports
+          path: |
+            models/silver/
+            run_reports/
+            metals_m1_usd_per_kg/download_report.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
