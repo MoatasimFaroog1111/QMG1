@@ -24,8 +24,8 @@ class HistGradientBoostingFactory:
             max_iter=self.config.max_iter,
             max_leaf_nodes=self.config.max_leaf_nodes,
             l2_regularization=self.config.l2_regularization,
-            early_stopping=True,
-            validation_fraction=0.1,
-            n_iter_no_change=30,
+            # Do not let sklearn create an internal random validation split.
+            # Time-series validation is owned by WalkForwardEvaluator.
+            early_stopping=False,
             random_state=self.config.random_state,
         )
