@@ -11,7 +11,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from qmg1.config import HORIZONS_HOURS, TrainingConfig  # noqa: E402
 from qmg1.ml.artifacts import ModelArtifactRepository  # noqa: E402
 from qmg1.ml.dataset import ForecastDatasetBuilder  # noqa: E402
-from qmg1.ml.exogenous import GoldSilverFeatureProvider  # noqa: E402
+from qmg1.ml.exogenous import (  # noqa: E402
+    GoldSilverFeatureProvider,
+    UsdIndexFeatureProvider,
+)
 from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
 
 
@@ -21,6 +24,7 @@ PATTERNS = {
     "palladium": "XPDCMDUSD_H1_USD_PER_KG_*.csv",
     "platinum": "XPTCMDUSD_H1_USD_PER_KG_*.csv",
 }
+UDX_PATTERN = "UDXUSD_H1_NATIVE_*.csv"
 
 
 def newest_matching(data_dir: Path, pattern: str) -> Path:
@@ -39,9 +43,14 @@ def dataset_builder_for(metal: str, data_dir: Path) -> ForecastDatasetBuilder:
         return ForecastDatasetBuilder()
 
     gold_csv = newest_matching(data_dir, PATTERNS["gold"])
+    udx_csv = newest_matching(data_dir, UDX_PATTERN)
     print(f"[EXOG] silver <- gold {gold_csv.name}")
+    print(f"[EXOG] silver <- UDX  {udx_csv.name}")
     return ForecastDatasetBuilder(
-        exogenous_providers=[GoldSilverFeatureProvider.from_hourly_csv(gold_csv)]
+        exogenous_providers=[
+            GoldSilverFeatureProvider.from_hourly_csv(gold_csv),
+            UsdIndexFeatureProvider.from_hourly_csv(udx_csv),
+        ]
     )
 
 
