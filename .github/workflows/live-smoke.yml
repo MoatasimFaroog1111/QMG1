@@ -9,10 +9,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  silver-live-smoke:
+  dukascopy-silver-smoke:
     if: github.head_ref == 'agent/metals-ml-foundation'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -27,12 +27,40 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
-      - name: Run real Dukascopy BI5 end-to-end smoke
+      - name: Run real Dukascopy BI5 smoke
         run: python scripts/live_smoke_test.py
 
-      - name: Print smoke report
+      - name: Print Dukascopy smoke report
         if: always()
         run: |
           if [ -f smoke_live/smoke_result.json ]; then
             cat smoke_live/smoke_result.json
+          fi
+
+  histdata-silver-smoke:
+    if: github.head_ref == 'agent/metals-ml-foundation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run real HistData bulk smoke
+        run: python scripts/histdata_smoke_test.py
+
+      - name: Print HistData smoke report
+        if: always()
+        run: |
+          if [ -f smoke_histdata/smoke_result.json ]; then
+            cat smoke_histdata/smoke_result.json
           fi
