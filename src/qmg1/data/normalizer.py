@@ -43,12 +43,12 @@ def _to_usd_per_kg(value: str) -> str:
 
 def _timestamp_ms(value: str) -> int:
     try:
-        ts = int(Decimal(value.strip()))
+        timestamp = int(Decimal(value.strip()))
     except (InvalidOperation, ValueError, AttributeError) as exc:
         raise ValueError(f"Invalid timestamp: {value!r}") from exc
-    if 0 < ts < 10_000_000_000:
-        ts *= 1000
-    return ts
+    if 0 < timestamp < 10_000_000_000:
+        timestamp *= 1000
+    return timestamp
 
 
 class UsdPerKgNormalizer:
@@ -58,7 +58,12 @@ class UsdPerKgNormalizer:
         self.output_root = output_root
         self.price_side = price_side
 
-    def normalize(self, metal: MetalSpec, files: list[Path], end_inclusive: str) -> NormalizationReport:
+    def normalize(
+        self,
+        metal: MetalSpec,
+        files: list[Path],
+        end_inclusive: str,
+    ) -> NormalizationReport:
         self.output_root.mkdir(parents=True, exist_ok=True)
         output = self.output_root / (
             f"{metal.output_symbol}_M1_USD_PER_KG_"
@@ -66,7 +71,7 @@ class UsdPerKgNormalizer:
         )
 
         report = NormalizationReport(metal=metal.name, output_file=str(output))
-        last_ts: int | None = None
+        last_timestamp: int | None = None
 
         with output.open("w", encoding="utf-8", newline="") as out_handle:
             writer = csv.DictWriter(
@@ -90,31 +95,47 @@ class UsdPerKgNormalizer:
 
             for path in files:
                 print(f"[CONV] {metal.name:10s} {path.name}")
-                with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as src:
-                    reader = csv.DictReader(src)
+                with path.open(
+                    "r",
+                    encoding="utf-8-sig",
+                    errors="replace",
+                    newline="",
+                ) as source_handle:
+                    reader = csv.DictReader(source_handle)
                     for original in reader:
-                        row = {str(k).strip().lower(): v for k, v in original.items() if k is not None}
+                        row = {
+                            str(key).strip().lower(): value
+                            for key, value in original.items()
+                            if key is not None
+                        }
                         try:
-                            ts = _timestamp_ms(row["timestamp"])
-                            if last_ts is not None and ts <= last_ts:
+                            timestamp = _timestamp_ms(row["timestamp"])
+                            if (
+                                last_timestamp is not None
+                                and timestamp <= last_timestamp
+                            ):
                                 report.duplicates_skipped += 1
                                 continue
 
-                            o = _decimal_price(row["open"])
-                            h = _decimal_price(row["high"])
-                            l = _decimal_price(row["low"])
-                            c = _decimal_price(row["close"])
-                            if l > h or not (l <= o <= h and l <= c <= h):
+                            open_price = _decimal_price(row["open"])
+                            high_price = _decimal_price(row["high"])
+                            low_price = _decimal_price(row["low"])
+                            close_price = _decimal_price(row["close"])
+                            if low_price > high_price or not (
+                                low_price <= open_price <= high_price
+                                and low_price <= close_price <= high_price
+                            ):
                                 raise ValueError("Invalid OHLC relationship")
 
-                            iso = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat(
-                                timespec="seconds"
-                            ).replace("+00:00", "Z")
+                            iso_timestamp = datetime.fromtimestamp(
+                                timestamp / 1000,
+                                tz=timezone.utc,
+                            ).isoformat(timespec="seconds").replace("+00:00", "Z")
 
                             writer.writerow(
                                 {
-                                    "timestamp_utc": iso,
-                                    "timestamp_ms": ts,
+                                    "timestamp_utc": iso_timestamp,
+                                    "timestamp_ms": timestamp,
                                     "open_usd_per_kg": _to_usd_per_kg(row["open"]),
                                     "high_usd_per_kg": _to_usd_per_kg(row["high"]),
                                     "low_usd_per_kg": _to_usd_per_kg(row["low"]),
@@ -129,9 +150,11 @@ class UsdPerKgNormalizer:
                             )
 
                             report.rows_written += 1
-                            report.first_timestamp_utc = report.first_timestamp_utc or iso
-                            report.last_timestamp_utc = iso
-                            last_ts = ts
+                            report.first_timestamp_utc = (
+                                report.first_timestamp_utc or iso_timestamp
+                            )
+                            report.last_timestamp_utc = iso_timestamp
+                            last_timestamp = timestamp
                         except (KeyError, ValueError, InvalidOperation, OverflowError):
                             report.malformed_skipped += 1
 
