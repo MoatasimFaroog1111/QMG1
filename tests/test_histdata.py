@@ -52,3 +52,19 @@ def test_hybrid_routes_gold_silver_to_histdata_and_pgms_to_dukascopy(
     assert provider.source_name_for(by_key["silver"]) == "HistData"
     assert provider.source_name_for(by_key["palladium"]) == "Dukascopy"
     assert provider.source_name_for(by_key["platinum"]) == "Dukascopy"
+
+
+def test_hybrid_keeps_histdata_bulk_and_bounds_dukascopy_yearly(
+    tmp_path: Path,
+) -> None:
+    provider = HybridPreciousMetalsM1Provider(tmp_path)
+    by_key = {metal.key: metal for metal in METALS}
+    start = date(2024, 6, 1)
+    end = date(2026, 8, 17)
+
+    assert provider.chunk_ranges(by_key["silver"], start, end) == [(start, end)]
+    assert provider.chunk_ranges(by_key["palladium"], start, end) == [
+        (date(2024, 6, 1), date(2025, 1, 1)),
+        (date(2025, 1, 1), date(2026, 1, 1)),
+        (date(2026, 1, 1), date(2026, 8, 17)),
+    ]
