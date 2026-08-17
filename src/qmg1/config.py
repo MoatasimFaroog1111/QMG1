@@ -23,7 +23,7 @@ class ProjectPaths:
 @dataclass(frozen=True)
 class TrainingConfig:
     min_rows: int = 5_000
-    validation_fraction: float = 0.20
+    cv_splits: int = 5
     random_state: int = 42
     max_iter: int = 350
     learning_rate: float = 0.05
