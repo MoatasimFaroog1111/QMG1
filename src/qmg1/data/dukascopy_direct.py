@@ -52,6 +52,9 @@ class DirectDukascopyM1Downloader:
     def source_name(self) -> str:
         return "Dukascopy"
 
+    def source_name_for(self, metal: MetalSpec) -> str:
+        return self.source_name
+
     @property
     def provider_description(self) -> str:
         return "direct Dukascopy BI5 datafeed (Python stdlib)"
