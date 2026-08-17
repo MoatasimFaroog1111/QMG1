@@ -39,6 +39,49 @@ def _smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     )
 
 
+def score_predictions(
+    *,
+    horizon_hours: int,
+    rows_total: int,
+    cv_splits: int,
+    current_close: np.ndarray,
+    actual_close: np.ndarray,
+    predicted_close: np.ndarray,
+    actual_log_return: np.ndarray,
+    predicted_log_return: np.ndarray,
+) -> HorizonMetrics:
+    mae = float(mean_absolute_error(actual_close, predicted_close))
+    rmse = float(math.sqrt(mean_squared_error(actual_close, predicted_close)))
+    persistence_mae = float(mean_absolute_error(actual_close, current_close))
+
+    actual_direction = np.sign(actual_close - current_close)
+    predicted_direction = np.sign(predicted_close - current_close)
+    directional_accuracy = float(
+        np.mean(actual_direction == predicted_direction) * 100.0
+    )
+    improvement = (
+        (persistence_mae - mae) / persistence_mae * 100.0
+        if persistence_mae > 0
+        else 0.0
+    )
+    residuals = actual_log_return - predicted_log_return
+
+    return HorizonMetrics(
+        horizon_hours=horizon_hours,
+        cv_splits=cv_splits,
+        rows_total=rows_total,
+        rows_validation_total=len(actual_close),
+        mae_usd_per_kg=mae,
+        rmse_usd_per_kg=rmse,
+        smape_pct=_smape(actual_close, predicted_close),
+        directional_accuracy_pct=directional_accuracy,
+        persistence_mae_usd_per_kg=persistence_mae,
+        improvement_vs_persistence_pct=improvement,
+        residual_log_return_q10=float(np.quantile(residuals, 0.10)),
+        residual_log_return_q90=float(np.quantile(residuals, 0.90)),
+    )
+
+
 class WalkForwardEvaluator:
     """Expanding walk-forward evaluation with target-time purging."""
 
@@ -60,7 +103,8 @@ class WalkForwardEvaluator:
         predicted_close_parts: list[np.ndarray] = []
         actual_close_parts: list[np.ndarray] = []
         current_close_parts: list[np.ndarray] = []
-        residual_parts: list[np.ndarray] = []
+        actual_return_parts: list[np.ndarray] = []
+        predicted_return_parts: list[np.ndarray] = []
 
         completed_folds = 0
         for fold, (train_idx, valid_idx) in enumerate(splitter.split(frame), start=1):
@@ -70,9 +114,6 @@ class WalkForwardEvaluator:
                 continue
 
             validation_start = valid.index[0]
-            # Purge every training sample whose target uses a price from the
-            # validation period or later. This is stricter and more exact than
-            # assuming one dataframe row equals one elapsed hour.
             train = candidate_train[
                 candidate_train[target_timestamp_col] < validation_start
             ]
@@ -93,11 +134,13 @@ class WalkForwardEvaluator:
             predicted_close_parts.append(predicted_close)
             actual_close_parts.append(actual_close)
             current_close_parts.append(current_close)
-            residual_parts.append(actual_log_return - predicted_log_return)
+            actual_return_parts.append(actual_log_return)
+            predicted_return_parts.append(predicted_log_return)
             completed_folds += 1
 
             print(
                 f"  [CV {fold}/{self.config.cv_splits}] "
+                f"model={self.model_factory.name} "
                 f"train={len(train):,} validation={len(valid):,} "
                 f"purged={len(candidate_train) - len(train):,}"
             )
@@ -105,37 +148,13 @@ class WalkForwardEvaluator:
         if not predicted_close_parts:
             raise ValueError("Walk-forward validation produced no usable folds")
 
-        predicted_close = np.concatenate(predicted_close_parts)
-        actual_close = np.concatenate(actual_close_parts)
-        current_close = np.concatenate(current_close_parts)
-        residuals = np.concatenate(residual_parts)
-
-        mae = float(mean_absolute_error(actual_close, predicted_close))
-        rmse = float(math.sqrt(mean_squared_error(actual_close, predicted_close)))
-        persistence_mae = float(mean_absolute_error(actual_close, current_close))
-
-        actual_direction = np.sign(actual_close - current_close)
-        predicted_direction = np.sign(predicted_close - current_close)
-        directional_accuracy = float(
-            np.mean(actual_direction == predicted_direction) * 100.0
-        )
-        improvement = (
-            (persistence_mae - mae) / persistence_mae * 100.0
-            if persistence_mae > 0
-            else 0.0
-        )
-
-        return HorizonMetrics(
+        return score_predictions(
             horizon_hours=horizon_hours,
-            cv_splits=completed_folds,
             rows_total=len(frame),
-            rows_validation_total=len(actual_close),
-            mae_usd_per_kg=mae,
-            rmse_usd_per_kg=rmse,
-            smape_pct=_smape(actual_close, predicted_close),
-            directional_accuracy_pct=directional_accuracy,
-            persistence_mae_usd_per_kg=persistence_mae,
-            improvement_vs_persistence_pct=improvement,
-            residual_log_return_q10=float(np.quantile(residuals, 0.10)),
-            residual_log_return_q90=float(np.quantile(residuals, 0.90)),
+            cv_splits=completed_folds,
+            current_close=np.concatenate(current_close_parts),
+            actual_close=np.concatenate(actual_close_parts),
+            predicted_close=np.concatenate(predicted_close_parts),
+            actual_log_return=np.concatenate(actual_return_parts),
+            predicted_log_return=np.concatenate(predicted_return_parts),
         )

@@ -8,12 +8,12 @@ from datetime import datetime, timezone
 from qmg1.config import HORIZONS_HOURS, TrainingConfig
 from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.dataset import FeatureBase, ForecastDatasetBuilder, PreparedDataset
-from qmg1.ml.evaluation import HorizonMetrics, WalkForwardEvaluator
-from qmg1.ml.model_factory import HistGradientBoostingFactory
+from qmg1.ml.evaluation import HorizonMetrics
+from qmg1.ml.selection import ChampionChallengerSelector
 
 
 class ForecastTrainer:
-    """Train once, validate out-of-sample, then persist the final models."""
+    """Select on development data, verify on holdout, then persist once."""
 
     def __init__(
         self,
@@ -24,8 +24,7 @@ class ForecastTrainer:
         self.config = config or TrainingConfig()
         self.dataset_builder = dataset_builder or ForecastDatasetBuilder()
         self.artifact_repository = artifact_repository
-        self.model_factory = HistGradientBoostingFactory(self.config)
-        self.evaluator = WalkForwardEvaluator(self.config, self.model_factory)
+        self.selector = ChampionChallengerSelector(self.config)
 
     def _train_prepared(
         self,
@@ -42,14 +41,19 @@ class ForecastTrainer:
                 f"{len(frame):,} < {self.config.min_rows:,}"
             )
 
-        metrics = self.evaluator.evaluate(frame, features, horizon_hours)
+        winning_factory, selection = self.selector.select(
+            frame,
+            features,
+            horizon_hours,
+        )
 
-        final_model = self.model_factory.create()
+        final_model = winning_factory.create()
         target_col = f"target_{horizon_hours}h"
         final_model.fit(frame[features], frame[target_col])
 
+        active_metrics = selection.active_holdout_metrics
         artifact = {
-            "schema_version": 3,
+            "schema_version": 4,
             "metal": metal,
             "horizon_hours": horizon_hours,
             "feature_columns": features,
@@ -58,12 +62,18 @@ class ForecastTrainer:
             "training_start_utc": frame.index[0].isoformat(),
             "training_end_utc": frame.index[-1].isoformat(),
             "training_config": asdict(self.config),
-            "validation_method": "expanding walk-forward with target-time purge",
-            "metrics": asdict(metrics),
+            "validation_method": (
+                "development walk-forward selection + untouched 20% holdout "
+                "with target-time purge"
+            ),
+            "active_strategy": selection.active_strategy,
+            "selected_challenger": selection.selected_model_name,
+            "selection": selection.to_dict(),
+            "metrics": asdict(active_metrics),
             "model": final_model,
         }
         self.artifact_repository.save(metal, horizon_hours, artifact)
-        return metrics
+        return active_metrics
 
     def train_one(
         self,
@@ -102,7 +112,10 @@ class ForecastTrainer:
             "source_csv": source_csv,
             "trained_at_utc": datetime.now(timezone.utc).isoformat(),
             "horizons_hours": list(requested_horizons),
-            "validation_method": "expanding walk-forward with target-time purge",
+            "validation_method": (
+                "development walk-forward champion/challenger selection + "
+                "untouched 20% holdout"
+            ),
             "feature_base_reused_across_horizons": True,
             "metrics": [asdict(item) for item in metrics],
         }

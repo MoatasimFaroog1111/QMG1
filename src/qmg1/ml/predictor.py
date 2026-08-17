@@ -9,7 +9,7 @@ from qmg1.ml.artifacts import ModelArtifactRepository
 
 
 class ForecastPredictor:
-    """Load persisted models and predict without retraining."""
+    """Load persisted champion strategy and predict without retraining."""
 
     def __init__(self, artifact_repository: ModelArtifactRepository) -> None:
         self.artifact_repository = artifact_repository
@@ -33,9 +33,17 @@ class ForecastPredictor:
 
         latest = ready.iloc[[-1]]
         current_close = float(latest.iloc[0]["close"])
-        predicted_log_return = float(
-            artifact["model"].predict(latest[feature_columns])[0]
+        active_strategy = str(artifact.get("active_strategy", "model"))
+        selected_challenger = str(
+            artifact.get("selected_challenger", active_strategy)
         )
+
+        if active_strategy == "persistence":
+            predicted_log_return = 0.0
+        else:
+            predicted_log_return = float(
+                artifact["model"].predict(latest[feature_columns])[0]
+            )
         predicted_close = current_close * math.exp(predicted_log_return)
 
         metrics = artifact["metrics"]
@@ -56,6 +64,8 @@ class ForecastPredictor:
             "timestamp_utc": timestamp.isoformat(),
             "target_timestamp_utc": target_timestamp.isoformat(),
             "horizon_hours": int(artifact["horizon_hours"]),
+            "active_strategy": active_strategy,
+            "selected_challenger": selected_challenger,
             "current_usd_per_kg": current_close,
             "predicted_usd_per_kg": predicted_close,
             "prediction_interval_80_low_usd_per_kg": low_close,
@@ -69,7 +79,7 @@ class ForecastPredictor:
                 metrics["improvement_vs_persistence_pct"]
             ),
             "interval_note": (
-                "Empirical 10th-90th percentile of out-of-sample "
+                "Empirical 10th-90th percentile of untouched holdout "
                 "log-return residuals; not a guarantee."
             ),
         }
