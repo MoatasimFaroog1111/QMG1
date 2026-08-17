@@ -45,7 +45,13 @@ def main() -> None:
         "--gold-hourly",
         type=Path,
         default=None,
-        help="Gold H1 CSV required only when the active silver champion uses gold features.",
+        help="Gold H1 CSV required only when the active champion uses gold features.",
+    )
+    parser.add_argument(
+        "--udx-hourly",
+        type=Path,
+        default=None,
+        help="UDX H1 CSV required only when the active champion uses Dollar Index features.",
     )
     args = parser.parse_args()
 
@@ -54,16 +60,18 @@ def main() -> None:
     models_dir = args.models_dir or paths.models_dir
     csv_path = newest_matching(data_dir, METAL_PATTERNS[args.metal])
 
-    exogenous_paths = None
+    exogenous_paths: dict[str, str] = {}
     if args.gold_hourly is not None:
-        exogenous_paths = {"gold": str(args.gold_hourly)}
+        exogenous_paths["gold"] = str(args.gold_hourly)
+    if args.udx_hourly is not None:
+        exogenous_paths["udx"] = str(args.udx_hourly)
 
     predictor = ForecastPredictor(ModelArtifactRepository(models_dir))
     result = predictor.predict_latest(
         csv_path=str(csv_path),
         metal=args.metal,
         horizon_hours=args.horizon,
-        exogenous_csv_paths=exogenous_paths,
+        exogenous_csv_paths=exogenous_paths or None,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
