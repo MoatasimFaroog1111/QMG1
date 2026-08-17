@@ -24,6 +24,9 @@ class ChampionSelection:
     challenger_holdout_metrics: HorizonMetrics
     active_holdout_metrics: HorizonMetrics
     holdout_start_utc: str
+    development_qualified: bool
+    holdout_qualified: bool
+    promotion_threshold_pct: float
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -36,6 +39,9 @@ class ChampionSelection:
             "challenger_holdout_metrics": asdict(self.challenger_holdout_metrics),
             "active_holdout_metrics": asdict(self.active_holdout_metrics),
             "holdout_start_utc": self.holdout_start_utc,
+            "development_qualified": self.development_qualified,
+            "holdout_qualified": self.holdout_qualified,
+            "promotion_threshold_pct": self.promotion_threshold_pct,
         }
 
 
@@ -87,6 +93,11 @@ class ChampionChallengerSelector:
             factory for factory in factories if factory.name == winning_score.model_name
         )
 
+        threshold = self.config.min_promotion_improvement_pct
+        development_qualified = (
+            winning_score.metrics.improvement_vs_persistence_pct >= threshold
+        )
+
         target_col = f"target_{horizon_hours}h"
         future_close_col = f"future_close_{horizon_hours}h"
         target_timestamp_col = f"target_timestamp_{horizon_hours}h"
@@ -130,9 +141,10 @@ class ChampionChallengerSelector:
             predicted_log_return=persistence_log_return,
         )
 
-        challenger_wins = (
-            challenger_metrics.mae_usd_per_kg < persistence_metrics.mae_usd_per_kg
+        holdout_qualified = (
+            challenger_metrics.improvement_vs_persistence_pct >= threshold
         )
+        challenger_wins = development_qualified and holdout_qualified
         active_strategy = winning_factory.name if challenger_wins else "persistence"
         active_metrics = challenger_metrics if challenger_wins else persistence_metrics
 
@@ -140,6 +152,9 @@ class ChampionChallengerSelector:
             f"  [HOLDOUT] selected={winning_factory.name} "
             f"challenger_MAE={challenger_metrics.mae_usd_per_kg:.4f} "
             f"persistence_MAE={persistence_metrics.mae_usd_per_kg:.4f} "
+            f"dev_gate={development_qualified} "
+            f"holdout_gate={holdout_qualified} "
+            f"threshold={threshold:.3f}% "
             f"active={active_strategy}"
         )
 
@@ -150,5 +165,8 @@ class ChampionChallengerSelector:
             challenger_holdout_metrics=challenger_metrics,
             active_holdout_metrics=active_metrics,
             holdout_start_utc=holdout_start.isoformat(),
+            development_qualified=development_qualified,
+            holdout_qualified=holdout_qualified,
+            promotion_threshold_pct=threshold,
         )
         return winning_factory, selection
