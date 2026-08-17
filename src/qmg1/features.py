@@ -75,6 +75,15 @@ def _rolling_zscore(series: pd.Series, window: int) -> pd.Series:
     return (series - mean) / std
 
 
+def _rolling_zscore_neutral_when_constant(series: pd.Series, window: int) -> pd.Series:
+    """Return a neutral 0 z-score only when a completed window has zero variance."""
+    rolling = series.rolling(window, min_periods=window)
+    mean = rolling.mean()
+    std = rolling.std()
+    zscore = (series - mean) / std.replace(0.0, np.nan)
+    return zscore.mask(std.eq(0.0), 0.0)
+
+
 def load_m1_csv(path: str) -> pd.DataFrame:
     """Load only the columns required by the modeling pipeline.
 
@@ -201,8 +210,13 @@ def build_features(hourly: pd.DataFrame) -> pd.DataFrame:
     volume = df["volume"].fillna(0.0).clip(lower=0.0)
     log_volume = np.log1p(volume)
     df["log_volume"] = log_volume
-    df["volume_zscore_24h"] = _rolling_zscore(log_volume, 24)
-    df["volume_zscore_168h"] = _rolling_zscore(log_volume, 168)
+    # HistData's Generic ASCII metal archives currently expose a zero volume
+    # field. Once a rolling window is complete, zero variance means volume has
+    # no relative information, so encode it as neutral 0 rather than NaN.
+    # Warm-up rows remain NaN and are discarded normally with other long-window
+    # technical features.
+    df["volume_zscore_24h"] = _rolling_zscore_neutral_when_constant(log_volume, 24)
+    df["volume_zscore_168h"] = _rolling_zscore_neutral_when_constant(log_volume, 168)
     df["minute_coverage"] = df["minute_count"] / 60.0
 
     hours = pd.Series(df.index.hour, index=df.index, dtype=float)
