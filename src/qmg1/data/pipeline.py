@@ -4,8 +4,9 @@ import json
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Sequence
 
-from .dukascopy_direct import DirectDukascopyM1Downloader
+from .hybrid import HybridPreciousMetalsM1Provider
 from .metals import METALS, REQUESTED_END_EXCLUSIVE, REQUESTED_START, MetalSpec
 from .normalizer import (
     TROY_OUNCE_GRAMS,
@@ -28,7 +29,7 @@ class MetalsDataPipeline:
         self.raw_root = root / "raw"
         self.final_root = root / "final"
         self.report_file = root / "download_report.json"
-        self.provider = provider or DirectDukascopyM1Downloader(raw_root=self.raw_root)
+        self.provider = provider or HybridPreciousMetalsM1Provider(raw_root=self.raw_root)
         self.normalizer = UsdPerKgNormalizer(
             output_root=self.final_root,
             price_side=self.provider.price_side,
@@ -51,35 +52,43 @@ class MetalsDataPipeline:
     def _download_metal(
         self,
         metal: MetalSpec,
+        start: date,
         end_exclusive: date,
     ) -> tuple[list[Path], list[dict[str, str]]]:
         files: list[Path] = []
         failures: list[dict[str, str]] = []
 
-        for start, stop in self._yearly_chunks(metal.effective_start, end_exclusive):
+        for chunk_start, chunk_stop in self._yearly_chunks(start, end_exclusive):
             try:
-                files.append(self.provider.download(metal, start, stop))
+                files.append(self.provider.download(metal, chunk_start, chunk_stop))
             except Exception as exc:
                 failures.append(
                     {
                         "metal": metal.name,
-                        "from": start.isoformat(),
-                        "to": stop.isoformat(),
+                        "from": chunk_start.isoformat(),
+                        "to": chunk_stop.isoformat(),
                         "error": str(exc),
                     }
                 )
-                print(f"[FAIL] {metal.name} {start} -> {stop}: {exc}")
+                print(f"[FAIL] {metal.name} {chunk_start} -> {chunk_stop}: {exc}")
 
         return files, failures
 
-    def run(self) -> dict[str, object]:
+    def run(
+        self,
+        metals: Sequence[MetalSpec] = METALS,
+        start: date | None = None,
+        end_exclusive: date | None = None,
+    ) -> dict[str, object]:
         self.root.mkdir(parents=True, exist_ok=True)
         self.provider.validate_runtime()
-        end_exclusive = self._actual_end_exclusive()
-        if end_exclusive <= REQUESTED_START:
+
+        requested_start = start or REQUESTED_START
+        actual_end = min(end_exclusive or self._actual_end_exclusive(), REQUESTED_END_EXCLUSIVE)
+        if actual_end <= requested_start:
             raise RuntimeError("Invalid requested data range")
 
-        end_inclusive = (end_exclusive - timedelta(days=1)).isoformat()
+        end_inclusive = (actual_end - timedelta(days=1)).isoformat()
         reports: list[NormalizationReport] = []
         failures: list[dict[str, str]] = []
 
@@ -87,17 +96,33 @@ class MetalsDataPipeline:
         print(f"Completed UTC data requested through: {end_inclusive}")
         print(f"Historical provider: {self.provider.provider_description}")
 
-        for metal in METALS:
-            files, metal_failures = self._download_metal(metal, end_exclusive)
+        for metal in metals:
+            metal_start = max(requested_start, metal.effective_start)
+            if metal_start >= actual_end:
+                continue
+
+            files, metal_failures = self._download_metal(
+                metal,
+                metal_start,
+                actual_end,
+            )
             failures.extend(metal_failures)
             if files:
-                reports.append(self.normalizer.normalize(metal, files, end_inclusive))
+                reports.append(
+                    self.normalizer.normalize(
+                        metal,
+                        files,
+                        end_inclusive,
+                        source_name=self.provider.source_name_for(metal),
+                        start_inclusive=metal_start.isoformat(),
+                    )
+                )
 
         metadata: dict[str, object] = {
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-            "requested_start": REQUESTED_START.isoformat(),
+            "requested_start": requested_start.isoformat(),
             "requested_end_inclusive": "2026-08-31",
-            "actual_end_exclusive": end_exclusive.isoformat(),
+            "actual_end_exclusive": actual_end.isoformat(),
             "source": self.provider.source_name,
             "provider": self.provider.provider_description,
             "timeframe": self.provider.timeframe,
