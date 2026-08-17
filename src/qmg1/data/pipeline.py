@@ -5,26 +5,33 @@ from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from .dukascopy import DukascopyConfig, DukascopyDownloader
+from .dukascopy_direct import DirectDukascopyM1Downloader
 from .metals import METALS, REQUESTED_END_EXCLUSIVE, REQUESTED_START, MetalSpec
-from .normalizer import TROY_OUNCE_GRAMS, TROY_OUNCES_PER_KG, NormalizationReport, UsdPerKgNormalizer
+from .normalizer import (
+    TROY_OUNCE_GRAMS,
+    TROY_OUNCES_PER_KG,
+    NormalizationReport,
+    UsdPerKgNormalizer,
+)
+from .provider import HistoricalM1Provider
 
 
 class MetalsDataPipeline:
-    """Orchestrates acquisition and normalization without owning their implementation details."""
+    """Orchestrate acquisition and normalization through replaceable providers."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        provider: HistoricalM1Provider | None = None,
+    ) -> None:
         self.root = root
         self.raw_root = root / "raw"
         self.final_root = root / "final"
         self.report_file = root / "download_report.json"
-        self.downloader = DukascopyDownloader(
-            raw_root=self.raw_root,
-            incoming_root=root / ".incoming",
-        )
+        self.provider = provider or DirectDukascopyM1Downloader(raw_root=self.raw_root)
         self.normalizer = UsdPerKgNormalizer(
             output_root=self.final_root,
-            price_side=self.downloader.config.price_type,
+            price_side=self.provider.price_side,
         )
 
     @staticmethod
@@ -41,13 +48,17 @@ class MetalsDataPipeline:
             yield cursor, chunk_end
             cursor = chunk_end
 
-    def _download_metal(self, metal: MetalSpec, end_exclusive: date) -> tuple[list[Path], list[dict[str, str]]]:
+    def _download_metal(
+        self,
+        metal: MetalSpec,
+        end_exclusive: date,
+    ) -> tuple[list[Path], list[dict[str, str]]]:
         files: list[Path] = []
         failures: list[dict[str, str]] = []
 
         for start, stop in self._yearly_chunks(metal.effective_start, end_exclusive):
             try:
-                files.append(self.downloader.download(metal, start, stop))
+                files.append(self.provider.download(metal, start, stop))
             except Exception as exc:
                 failures.append(
                     {
@@ -63,7 +74,7 @@ class MetalsDataPipeline:
 
     def run(self) -> dict[str, object]:
         self.root.mkdir(parents=True, exist_ok=True)
-        self.downloader.validate_runtime()
+        self.provider.validate_runtime()
         end_exclusive = self._actual_end_exclusive()
         if end_exclusive <= REQUESTED_START:
             raise RuntimeError("Invalid requested data range")
@@ -74,6 +85,7 @@ class MetalsDataPipeline:
 
         print(f"Troy ounces per kg: {TROY_OUNCES_PER_KG}")
         print(f"Completed UTC data requested through: {end_inclusive}")
+        print(f"Historical provider: {self.provider.provider_description}")
 
         for metal in METALS:
             files, metal_failures = self._download_metal(metal, end_exclusive)
@@ -86,10 +98,10 @@ class MetalsDataPipeline:
             "requested_start": REQUESTED_START.isoformat(),
             "requested_end_inclusive": "2026-08-31",
             "actual_end_exclusive": end_exclusive.isoformat(),
-            "source": "Dukascopy",
-            "downloader": f"dukascopy-node {DukascopyConfig().package_version}",
-            "timeframe": DukascopyConfig().timeframe,
-            "price_side": DukascopyConfig().price_type,
+            "source": self.provider.source_name,
+            "provider": self.provider.provider_description,
+            "timeframe": self.provider.timeframe,
+            "price_side": self.provider.price_side,
             "source_price_unit": "USD/troy_ounce",
             "final_price_unit": "USD/kg",
             "troy_ounce_grams": str(TROY_OUNCE_GRAMS),
