@@ -29,6 +29,7 @@ def test_persistence_remains_champion_when_challengers_do_not_improve() -> None:
         learning_rate=0.05,
         max_leaf_nodes=15,
         l2_regularization=1.0,
+        min_promotion_improvement_pct=0.5,
     )
 
     _, result = ChampionChallengerSelector(config).select(
@@ -40,3 +41,6 @@ def test_persistence_remains_champion_when_challengers_do_not_improve() -> None:
     assert result.active_strategy == "persistence"
     assert result.active_holdout_metrics.mae_usd_per_kg == 0.0
     assert len(result.development_candidates) >= 3
+    assert result.development_qualified is False
+    assert result.holdout_qualified is False
+    assert result.promotion_threshold_pct == 0.5
