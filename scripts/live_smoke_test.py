@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from qmg1.config import TrainingConfig
-from qmg1.data.dukascopy import DukascopyDownloader
+from qmg1.data.dukascopy import DukascopyConfig, DukascopyDownloader
 from qmg1.data.metals import METALS
 from qmg1.data.normalizer import UsdPerKgNormalizer
 from qmg1.ml.artifacts import ModelArtifactRepository
@@ -39,10 +39,29 @@ def main() -> None:
     start = end_exclusive - timedelta(days=75)
     end_inclusive = (end_exclusive - timedelta(days=1)).isoformat()
 
-    downloader = DukascopyDownloader(raw_root=raw_root, incoming_root=incoming_root)
+    # dukascopy-node 1.49+ moved to a JSON API engine which currently returns
+    # persistent HTTP 429 responses from shared GitHub-hosted runner IPs.
+    # 1.46.4 uses the historical datafeed engine and includes the Node 22 fix,
+    # making it the compatibility engine for the bulk-data smoke path.
+    downloader = DukascopyDownloader(
+        raw_root=raw_root,
+        incoming_root=incoming_root,
+        config=DukascopyConfig(
+            package_version="1.46.4",
+            batch_size=5,
+            batch_pause_ms=1500,
+            retry_count=8,
+            retry_pause_ms=3000,
+            process_attempts=3,
+            process_backoff_seconds=15,
+        ),
+    )
     downloader.validate_runtime()
 
-    print(f"[SMOKE] live silver data {start} -> {end_exclusive} (exclusive)")
+    print(
+        f"[SMOKE] live silver data {start} -> {end_exclusive} (exclusive) "
+        f"engine=dukascopy-node@{downloader.config.package_version}"
+    )
     raw_csv = downloader.download(silver, start, end_exclusive)
 
     normalizer = UsdPerKgNormalizer(
@@ -97,6 +116,7 @@ def main() -> None:
         "generated_at_utc": now_utc.isoformat(),
         "metal": "silver",
         "source": "Dukascopy live M1 bid data",
+        "source_engine": f"dukascopy-node@{downloader.config.package_version}",
         "source_range": {
             "start": start.isoformat(),
             "end_exclusive": end_exclusive.isoformat(),
