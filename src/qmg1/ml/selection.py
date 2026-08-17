@@ -7,7 +7,11 @@ import pandas as pd
 
 from qmg1.config import TrainingConfig
 from qmg1.ml.evaluation import HorizonMetrics, WalkForwardEvaluator, score_predictions
-from qmg1.ml.model_factory import RegressorFactory, candidate_factories
+from qmg1.ml.model_factory import (
+    RegressorFactory,
+    apply_training_lookback,
+    candidate_factories,
+)
 
 
 @dataclass(frozen=True)
@@ -102,9 +106,14 @@ class ChampionChallengerSelector:
         future_close_col = f"future_close_{horizon_hours}h"
         target_timestamp_col = f"target_timestamp_{horizon_hours}h"
         holdout_start = holdout.index[0]
-        holdout_train = development[
+        purged_holdout_train = development[
             development[target_timestamp_col] < holdout_start
         ]
+        holdout_train = apply_training_lookback(
+            winning_factory,
+            purged_holdout_train,
+            holdout_start,
+        )
         if holdout_train.empty:
             raise ValueError("No leakage-safe development rows remain before holdout")
 
@@ -150,6 +159,7 @@ class ChampionChallengerSelector:
 
         print(
             f"  [HOLDOUT] selected={winning_factory.name} "
+            f"lookback_days={winning_factory.lookback_days or 'all'} "
             f"challenger_MAE={challenger_metrics.mae_usd_per_kg:.4f} "
             f"persistence_MAE={persistence_metrics.mae_usd_per_kg:.4f} "
             f"dev_gate={development_qualified} "
