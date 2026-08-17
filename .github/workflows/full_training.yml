@@ -53,6 +53,10 @@ jobs:
         if: env.METAL == 'silver'
         run: python scripts/prepare_hourly_training_data.py --metal gold --cleanup-raw
 
+      - name: Download US Dollar Index context for Silver
+        if: env.METAL == 'silver'
+        run: python scripts/prepare_market_series.py --series udx --cleanup-raw
+
       - name: Preserve hourly training datasets
         uses: actions/upload-artifact@v4
         with:
