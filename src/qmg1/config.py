@@ -31,3 +31,8 @@ class TrainingConfig:
     learning_rate: float = 0.05
     max_leaf_nodes: int = 31
     l2_regularization: float = 1.0
+    # A challenger must clear this relative MAE improvement on BOTH the
+    # development walk-forward evaluation and the untouched holdout before it
+    # can replace persistence as the production champion. This prevents tiny,
+    # fragile holdout wins from being promoted.
+    min_promotion_improvement_pct: float = 0.5
