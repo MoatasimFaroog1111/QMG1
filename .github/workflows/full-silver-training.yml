@@ -8,7 +8,7 @@ concurrency:
   group: full-silver-training
   cancel-in-progress: false
 
-# Full-run revision: zero-volume-neutral-v1
+# Full-run revision: candidate-selector-v1
 jobs:
   full-silver:
     if: contains(github.event.head_commit.message, '[full-silver]')
@@ -44,21 +44,21 @@ jobs:
           ls -lh metals_m1_usd_per_kg/final/ || true
           cat metals_m1_usd_per_kg/download_report.json
 
-      - name: Train all requested Silver horizons
+      - name: Benchmark candidates and train selected Silver models
         run: |
           python scripts/train_models.py --metal silver
           echo "--- persisted model files ---"
           find models/silver -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
           cat models/silver/silver_training_report.json
 
-      - name: Generate persisted-model predictions
+      - name: Generate persisted-model predictions in one feature pass
         run: |
           mkdir -p run_reports
-          for H in 2 4 8 12 24 72 168 360 720; do
-            echo "=== SILVER ${H}h ==="
-            python scripts/predict.py --metal silver --horizon "$H" \
-              | tee "run_reports/silver_${H}h_prediction.json"
-          done
+          python scripts/predict.py \
+            --metal silver \
+            --horizon 2 4 8 12 24 72 168 360 720 \
+            --allow-rejected \
+            | tee run_reports/silver_all_predictions.json
 
       - name: Record run manifest
         run: |
@@ -76,6 +76,8 @@ jobs:
               "forecast_horizons_hours": [2, 4, 8, 12, 24, 72, 168, 360, 720],
               "data_report": "metals_m1_usd_per_kg/download_report.json",
               "training_report": "models/silver/silver_training_report.json",
+              "predictions": "run_reports/silver_all_predictions.json",
+              "prediction_mode": "batch feature pass; rejected models shown only for research diagnostics",
           }
           Path("run_reports/full_silver_manifest.json").write_text(
               json.dumps(manifest, indent=2), encoding="utf-8"
