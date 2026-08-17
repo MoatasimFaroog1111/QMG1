@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from qmg1.config import HORIZONS_HOURS, TrainingConfig
 from qmg1.ml.artifacts import ModelArtifactRepository
-from qmg1.ml.dataset import ForecastDatasetBuilder, PreparedDataset
+from qmg1.ml.dataset import FeatureBase, ForecastDatasetBuilder, PreparedDataset
 from qmg1.ml.evaluation import HorizonMetrics, WalkForwardEvaluator
 from qmg1.ml.model_factory import HistGradientBoostingFactory
 
@@ -74,11 +74,12 @@ class ForecastTrainer:
         prepared = self.dataset_builder.build(csv_path, horizon_hours)
         return self._train_prepared(prepared, metal)
 
-    def train_all(
+    def _train_all_from_base(
         self,
-        csv_path: str,
+        base: FeatureBase,
+        source_csv: str,
         metal: str,
-        horizons: Sequence[int] = HORIZONS_HOURS,
+        horizons: Sequence[int],
     ) -> list[HorizonMetrics]:
         requested_horizons = tuple(horizons)
         if not requested_horizons:
@@ -88,12 +89,7 @@ class ForecastTrainer:
         if unknown:
             raise ValueError(f"Unsupported forecast horizons: {unknown}")
 
-        # M1 loading, hourly resampling, and feature engineering are the most
-        # expensive deterministic steps. Compute them once per metal, then
-        # attach each requested horizon target to the same immutable base.
-        base = self.dataset_builder.load_feature_base(csv_path)
         metrics: list[HorizonMetrics] = []
-
         for horizon in requested_horizons:
             print(f"[TRAIN] {metal} horizon={horizon}h")
             prepared = self.dataset_builder.build_from_base(base, horizon)
@@ -103,7 +99,7 @@ class ForecastTrainer:
         report_dir.mkdir(parents=True, exist_ok=True)
         report = {
             "metal": metal,
-            "source_csv": csv_path,
+            "source_csv": source_csv,
             "trained_at_utc": datetime.now(timezone.utc).isoformat(),
             "horizons_hours": list(requested_horizons),
             "validation_method": "expanding walk-forward with target-time purge",
@@ -114,3 +110,21 @@ class ForecastTrainer:
             json.dumps(report, indent=2), encoding="utf-8"
         )
         return metrics
+
+    def train_all(
+        self,
+        csv_path: str,
+        metal: str,
+        horizons: Sequence[int] = HORIZONS_HOURS,
+    ) -> list[HorizonMetrics]:
+        base = self.dataset_builder.load_feature_base(csv_path)
+        return self._train_all_from_base(base, csv_path, metal, horizons)
+
+    def train_all_hourly(
+        self,
+        csv_path: str,
+        metal: str,
+        horizons: Sequence[int] = HORIZONS_HOURS,
+    ) -> list[HorizonMetrics]:
+        base = self.dataset_builder.load_hourly_feature_base(csv_path)
+        return self._train_all_from_base(base, csv_path, metal, horizons)

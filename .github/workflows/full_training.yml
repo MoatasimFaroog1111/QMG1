@@ -1,0 +1,64 @@
+name: Full Metals Training
+
+on:
+  workflow_dispatch:
+    inputs:
+      metal:
+        description: Metal to download and train
+        required: true
+        default: silver
+        type: choice
+        options:
+          - silver
+          - gold
+          - palladium
+          - platinum
+  push:
+    branches: ["agent/metals-ml-foundation"]
+    paths:
+      - ".github/triggers/full-training"
+
+concurrency:
+  group: qmg1-full-training-${{ github.event.inputs.metal || 'silver' }}
+  cancel-in-progress: false
+
+jobs:
+  full-training:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      METAL: ${{ github.event.inputs.metal || 'silver' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Verify Node runtime
+        run: node --version && npx --version
+
+      - name: Download M1 and compact to H1 USD per kg
+        run: python scripts/prepare_hourly_training_data.py --metal "$METAL" --cleanup-raw
+
+      - name: Train all requested horizons
+        run: python scripts/train_hourly_models.py --metal "$METAL"
+
+      - name: Show training report
+        run: cat "models/$METAL/${METAL}_training_report.json"
+
+      - name: Upload hourly data and persisted models
+        uses: actions/upload-artifact@v4
+        with:
+          name: qmg1-${{ env.METAL }}-${{ github.run_id }}
+          path: |
+            training_data/hourly/*.csv
+            models/${{ env.METAL }}/
+          if-no-files-found: error
+          retention-days: 14
