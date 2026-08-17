@@ -133,7 +133,7 @@ class GoldSilverFeatureProvider:
         features: pd.DataFrame,
         target_hourly: pd.DataFrame,
     ) -> pd.DataFrame:
-        if features.empty or target_hourly.empty:
+        if len(features.index) == 0 or target_hourly.empty:
             return features.copy()
 
         target = target_hourly.copy().sort_index()
