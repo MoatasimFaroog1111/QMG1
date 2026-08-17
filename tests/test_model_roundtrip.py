@@ -16,7 +16,7 @@ from qmg1.ml.predictor import ForecastPredictor  # noqa: E402
 from qmg1.ml.trainer import ForecastTrainer  # noqa: E402
 
 
-def _write_synthetic_m1(path: Path) -> None:
+def _write_synthetic_m1(path: Path, volume: str = "variable") -> None:
     minutes = 60 * 1_100
     timestamps = pd.date_range("2024-01-01", periods=minutes, freq="min", tz="UTC")
     x = np.arange(minutes, dtype=float)
@@ -25,6 +25,11 @@ def _write_synthetic_m1(path: Path) -> None:
     close_price = center + 0.10 * np.cos(x / 19.0)
     high_price = np.maximum(open_price, close_price) + 0.35
     low_price = np.minimum(open_price, close_price) - 0.35
+    volume_values = (
+        np.zeros(minutes, dtype=float)
+        if volume == "zero"
+        else 100.0 + 5.0 * np.sin(x / 31.0)
+    )
 
     frame = pd.DataFrame(
         {
@@ -33,17 +38,14 @@ def _write_synthetic_m1(path: Path) -> None:
             "high_usd_per_kg": high_price,
             "low_usd_per_kg": low_price,
             "close_usd_per_kg": close_price,
-            "volume_source_units": 100.0 + 5.0 * np.sin(x / 31.0),
+            "volume_source_units": volume_values,
         }
     )
     frame.to_csv(path, index=False)
 
 
-def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
-    csv_path = tmp_path / "synthetic_m1.csv"
-    _write_synthetic_m1(csv_path)
-
-    repository = ModelArtifactRepository(tmp_path / "models")
+def _assert_roundtrip(csv_path: Path, models_dir: Path) -> None:
+    repository = ModelArtifactRepository(models_dir)
     trainer = ForecastTrainer(
         artifact_repository=repository,
         config=TrainingConfig(
@@ -76,3 +78,15 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
     assert float(prediction["current_usd_per_kg"]) > 0
     assert float(prediction["predicted_usd_per_kg"]) > 0
     assert math.isfinite(float(prediction["predicted_change_pct"]))
+
+
+def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
+    csv_path = tmp_path / "synthetic_m1.csv"
+    _write_synthetic_m1(csv_path)
+    _assert_roundtrip(csv_path, tmp_path / "models")
+
+
+def test_train_roundtrip_survives_zero_source_volume(tmp_path: Path) -> None:
+    csv_path = tmp_path / "synthetic_zero_volume_m1.csv"
+    _write_synthetic_m1(csv_path, volume="zero")
+    _assert_roundtrip(csv_path, tmp_path / "models_zero_volume")
