@@ -1,3 +1,3 @@
 silver full-history training trigger
 2026-08-17
-retry=11 causal-gold-udx-spx-wti-context
+retry=12 causal-gold-udx-spx-current-context
