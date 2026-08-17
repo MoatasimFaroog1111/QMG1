@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qmg1.data.hourly import HourlyTrainingDataPipeline
+from qmg1.data.hourly import HourlyTrainingDataPipeline  # noqa: E402
 
 
 def main() -> None:
