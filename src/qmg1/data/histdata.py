@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import sys
 import time
 import zipfile
@@ -260,9 +261,12 @@ class HistDataM1Downloader:
         rows_written = 0
         with zipfile.ZipFile(archive_path, "r") as archive:
             members = sorted(
-                info
-                for info in archive.infolist()
-                if not info.is_dir() and info.filename.lower().endswith(".csv")
+                (
+                    info
+                    for info in archive.infolist()
+                    if not info.is_dir() and info.filename.lower().endswith(".csv")
+                ),
+                key=lambda info: info.filename,
             )
             if not members:
                 raise RuntimeError(f"No CSV found in HistData archive {archive_path}")
@@ -286,6 +290,19 @@ class HistDataM1Downloader:
                             low_price = float(row[3])
                             close_price = float(row[4])
                             volume = float(row[5]) if row[5].strip() else 0.0
+                            values = (
+                                open_price,
+                                high_price,
+                                low_price,
+                                close_price,
+                                volume,
+                            )
+                            if not all(math.isfinite(value) for value in values):
+                                continue
+                            if min(open_price, high_price, low_price, close_price) <= 0:
+                                continue
+                            if volume < 0:
+                                continue
                             if low_price > high_price or not (
                                 low_price <= open_price <= high_price
                                 and low_price <= close_price <= high_price
@@ -320,8 +337,12 @@ class HistDataM1Downloader:
 
         periods = self._periods(pair, start, end)
         archives = [self._download_period(period) for period in periods]
-        start_ms = int(datetime.combine(start, datetime.min.time(), timezone.utc).timestamp() * 1000)
-        end_ms = int(datetime.combine(end, datetime.min.time(), timezone.utc).timestamp() * 1000)
+        start_ms = int(
+            datetime.combine(start, datetime.min.time(), timezone.utc).timestamp() * 1000
+        )
+        end_ms = int(
+            datetime.combine(end, datetime.min.time(), timezone.utc).timestamp() * 1000
+        )
 
         part = destination.with_suffix(destination.suffix + ".part")
         rows_written = 0
