@@ -30,6 +30,25 @@ jobs:
       - name: Verify Node runtime
         run: node --version && npm --version && npx --version
 
+      - name: Probe raw Dukascopy M1 datafeed
+        run: |
+          set +e
+          URL="https://datafeed.dukascopy.com/datafeed/XAGUSD/2025/00/03/BID_candles_min_1.bi5"
+          echo "PROBE_URL=$URL"
+          curl -L -sS \
+            --connect-timeout 20 \
+            --max-time 60 \
+            -o /tmp/xagusd_probe.bi5 \
+            -w 'PROBE_HTTP=%{http_code} PROBE_BYTES=%{size_download} PROBE_TIME=%{time_total}\n' \
+            "$URL"
+          RC=$?
+          echo "PROBE_CURL_RC=$RC"
+          if [ -f /tmp/xagusd_probe.bi5 ]; then
+            wc -c /tmp/xagusd_probe.bi5
+            file /tmp/xagusd_probe.bi5 || true
+          fi
+          exit 0
+
       - name: Run live end-to-end smoke
         run: python scripts/live_smoke_test.py
 
