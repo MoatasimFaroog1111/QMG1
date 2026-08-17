@@ -34,7 +34,7 @@ def newest_matching(data_dir: Path, pattern: str) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Train once, validate, and persist QMG1 forecasting models"
+        description="Train once, validate candidates, and persist QMG1 models"
     )
     parser.add_argument("--metal", choices=[*METAL_PATTERNS, "all"], default="all")
     parser.add_argument(
@@ -88,11 +88,16 @@ def main() -> None:
 
         metrics = trainer.train_all(str(csv_path), metal, horizons=pending)
         for item in metrics:
+            artifact = repository.load(metal, item.horizon_hours)
+            status = artifact["operational_status"]
+            gate_label = "ACCEPTED" if status["accepted"] else "REJECTED"
             print(
-                f"[OK] {metal:10s} {item.horizon_hours:4d}h "
+                f"[EVAL] {metal:10s} {item.horizon_hours:4d}h "
+                f"model={artifact['selected_model']} gate={gate_label} "
                 f"MAE={item.mae_usd_per_kg:.2f} USD/kg "
-                f"direction={item.directional_accuracy_pct:.2f}% "
-                f"vs_persistence={item.improvement_vs_persistence_pct:+.2f}%"
+                f"overall_vs_persistence={item.improvement_vs_persistence_pct:+.2f}% "
+                f"recent_vs_persistence="
+                f"{item.latest_fold_improvement_vs_persistence_pct:+.2f}%"
             )
 
 
