@@ -62,16 +62,17 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
 
     assert artifact_path.exists()
     assert metrics.rows_total >= 100
-    # Returned metrics represent the untouched final holdout, not the
-    # development walk-forward folds used for challenger selection.
     assert metrics.cv_splits == 1
     assert math.isfinite(metrics.mae_usd_per_kg)
 
     artifact = repository.load("silver", 2)
-    assert artifact["schema_version"] == 4
+    assert artifact["schema_version"] == 5
     assert artifact["validation_method"].startswith("development walk-forward")
+    assert "candidate_training_lookback_days" in artifact
     development_candidates = artifact["selection"]["development_candidates"]
-    assert development_candidates
+    assert len(development_candidates) >= 9
+    assert any("lookback_730d" in item["model_name"] for item in development_candidates)
+    assert any("lookback_1825d" in item["model_name"] for item in development_candidates)
     assert all(
         candidate["metrics"]["cv_splits"] == 2
         for candidate in development_candidates
