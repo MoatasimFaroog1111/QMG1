@@ -35,12 +35,27 @@ def newest_matching(data_dir: Path, pattern: str) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Load a persisted QMG1 model and predict without retraining"
+        description="Load persisted QMG1 models and predict without retraining"
     )
     parser.add_argument("--metal", choices=METAL_PATTERNS, required=True)
-    parser.add_argument("--horizon", type=int, choices=HORIZONS_HOURS, required=True)
+    parser.add_argument(
+        "--horizon",
+        type=int,
+        choices=HORIZONS_HOURS,
+        nargs="+",
+        required=True,
+        help="One or more persisted forecast horizons in hours",
+    )
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--models-dir", type=Path, default=None)
+    parser.add_argument(
+        "--allow-rejected",
+        action="store_true",
+        help=(
+            "Research/diagnostic override: emit forecasts even when the model "
+            "failed the persistence-baseline operational gate"
+        ),
+    )
     args = parser.parse_args()
 
     paths = ProjectPaths(ROOT)
@@ -49,11 +64,21 @@ def main() -> None:
     csv_path = newest_matching(data_dir, METAL_PATTERNS[args.metal])
 
     predictor = ForecastPredictor(ModelArtifactRepository(models_dir))
-    result = predictor.predict_latest(
-        csv_path=str(csv_path),
-        metal=args.metal,
-        horizon_hours=args.horizon,
-    )
+    horizons = tuple(args.horizon)
+    if len(horizons) == 1:
+        result = predictor.predict_latest(
+            csv_path=str(csv_path),
+            metal=args.metal,
+            horizon_hours=horizons[0],
+            allow_rejected=args.allow_rejected,
+        )
+    else:
+        result = predictor.predict_many(
+            csv_path=str(csv_path),
+            metal=args.metal,
+            horizons=horizons,
+            allow_rejected=args.allow_rejected,
+        )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
