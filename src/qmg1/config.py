@@ -31,3 +31,8 @@ class TrainingConfig:
     learning_rate: float = 0.05
     max_leaf_nodes: int = 31
     l2_regularization: float = 1.0
+    # Operational forecasts must beat the no-change/persistence benchmark both
+    # across all OOS folds and on the most recent fold. Strictly greater than
+    # these thresholds is required; equality is still considered unproven.
+    min_operational_improvement_pct: float = 0.0
+    min_recent_improvement_pct: float = 0.0
