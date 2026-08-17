@@ -31,8 +31,27 @@ US_DOLLAR_INDEX = MarketSeriesSpec(
     unit="index_points",
 )
 
+SP500_INDEX = MarketSeriesSpec(
+    key="spx",
+    name="S&P 500",
+    histdata_pair="SPXUSD",
+    output_symbol="SPXUSD",
+    effective_start=date(2009, 5, 1),
+    unit="index_points",
+)
+
+WTI_CRUDE_OIL = MarketSeriesSpec(
+    key="wti",
+    name="WTI Crude Oil",
+    histdata_pair="WTIUSD",
+    output_symbol="WTIUSD",
+    effective_start=date(2009, 5, 1),
+    unit="usd_per_barrel",
+)
+
 MARKET_SERIES: dict[str, MarketSeriesSpec] = {
-    US_DOLLAR_INDEX.key: US_DOLLAR_INDEX,
+    item.key: item
+    for item in (US_DOLLAR_INDEX, SP500_INDEX, WTI_CRUDE_OIL)
 }
 
 
