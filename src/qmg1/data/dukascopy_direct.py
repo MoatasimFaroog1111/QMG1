@@ -26,16 +26,18 @@ class DirectDukascopyConfig:
     timeout_seconds: int = 60
     max_attempts: int = 6
     base_backoff_seconds: float = 2.0
-    request_pause_seconds: float = 0.10
+    request_pause_seconds: float = 0.50
+    download_passes: int = 3
+    pass_backoff_seconds: float = 20.0
     user_agent: str = "QMG1/0.1 historical-market-data"
 
 
 class DirectDukascopyM1Downloader:
     """Download and decode Dukascopy daily M1 BI5 files directly in Python.
 
-    The provider owns only acquisition and BI5 decoding. Its aggregate CSV
-    contract intentionally matches the former CLI adapter so normalization,
-    feature engineering, training, and inference remain provider-agnostic.
+    The provider owns only acquisition and BI5 decoding. Daily compressed
+    payloads are cached before aggregate CSV construction, so interrupted or
+    partially rate-limited historical runs resume from already fetched days.
     """
 
     def __init__(
@@ -67,6 +69,8 @@ class DirectDukascopyM1Downloader:
             raise RuntimeError("DirectDukascopyM1Downloader supports only M1")
         if self.config.price_side not in {"bid", "ask"}:
             raise RuntimeError(f"Unsupported price side: {self.config.price_side}")
+        if self.config.max_attempts < 1 or self.config.download_passes < 1:
+            raise RuntimeError("Retry counts must be positive")
 
     def destination_path(self, metal: MetalSpec, start: date, end: date) -> Path:
         return (
@@ -95,6 +99,12 @@ class DirectDukascopyM1Downloader:
         payload = day_root / f"{day.day:02d}_{self.price_side}.bi5"
         empty_marker = day_root / f"{day.day:02d}_{self.price_side}.empty"
         return payload, empty_marker
+
+    def _is_cached(self, metal: MetalSpec, day: date) -> bool:
+        payload_path, empty_marker = self._cache_paths(metal, day)
+        return (
+            payload_path.exists() and payload_path.stat().st_size > 0
+        ) or empty_marker.exists()
 
     @staticmethod
     def _iter_days(start: date, end: date):
@@ -171,6 +181,54 @@ class DirectDukascopyM1Downloader:
 
         raise RuntimeError(f"Unable to download {metal.name} M1 for {day}")
 
+    def _populate_cache(self, metal: MetalSpec, days: list[date]) -> None:
+        pending = [day for day in days if not self._is_cached(metal, day)]
+        if not pending:
+            return
+
+        for pass_number in range(1, self.config.download_passes + 1):
+            failures: list[tuple[date, str]] = []
+            total = len(pending)
+            print(
+                f"[PASS] {metal.name:10s} {pass_number}/{self.config.download_passes} "
+                f"pending_days={total:,}"
+            )
+
+            for position, day in enumerate(pending, start=1):
+                was_cached = self._is_cached(metal, day)
+                try:
+                    self._fetch_day_payload(metal, day)
+                except RuntimeError as exc:
+                    failures.append((day, str(exc)))
+
+                if position % 25 == 0 or position == total:
+                    print(
+                        f"[FETCH] {metal.name:10s} pass={pass_number} "
+                        f"progress={position:,}/{total:,} failures={len(failures):,}"
+                    )
+                if not was_cached and self.config.request_pause_seconds > 0:
+                    time.sleep(self.config.request_pause_seconds)
+
+            if not failures:
+                return
+
+            if pass_number >= self.config.download_passes:
+                sample = "; ".join(
+                    f"{day}: {message}" for day, message in failures[:5]
+                )
+                raise RuntimeError(
+                    f"Unresolved Dukascopy days for {metal.name}: {len(failures)} "
+                    f"after {self.config.download_passes} passes. Sample: {sample}"
+                )
+
+            pending = [day for day, _ in failures]
+            delay = self.config.pass_backoff_seconds * pass_number
+            print(
+                f"[COOL] {metal.name:10s} unresolved={len(pending):,}; "
+                f"sleeping {delay:.1f}s before retry pass"
+            )
+            time.sleep(delay)
+
     def decode_day(
         self,
         payload: bytes,
@@ -238,6 +296,9 @@ class DirectDukascopyM1Downloader:
             print(f"[SKIP] {metal.name:10s} {start} -> {end}")
             return destination
 
+        days = list(self._iter_days(start, end))
+        self._populate_cache(metal, days)
+
         part = destination.with_suffix(destination.suffix + ".part")
         rows_written = 0
         days_with_data = 0
@@ -246,7 +307,7 @@ class DirectDukascopyM1Downloader:
             writer = csv.writer(handle)
             writer.writerow(["timestamp", "open", "high", "low", "close", "volume"])
 
-            for day in self._iter_days(start, end):
+            for day in days:
                 payload = self._fetch_day_payload(metal, day)
                 if payload is None:
                     continue
@@ -257,14 +318,11 @@ class DirectDukascopyM1Downloader:
                 rows_written += len(rows)
                 if rows:
                     days_with_data += 1
-
-                if days_with_data and days_with_data % 25 == 0:
-                    print(
-                        f"[BI5 ] {metal.name:10s} data_days={days_with_data:,} "
-                        f"rows={rows_written:,} through={day}"
-                    )
-                if self.config.request_pause_seconds > 0:
-                    time.sleep(self.config.request_pause_seconds)
+                    if days_with_data % 25 == 0:
+                        print(
+                            f"[BI5 ] {metal.name:10s} data_days={days_with_data:,} "
+                            f"rows={rows_written:,} through={day}"
+                        )
 
         if rows_written == 0:
             part.unlink(missing_ok=True)
