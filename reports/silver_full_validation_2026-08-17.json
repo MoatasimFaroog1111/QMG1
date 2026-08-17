@@ -1,0 +1,55 @@
+{
+  "status": "baseline_rejected",
+  "generated_from_workflow": {
+    "run_id": 32012112547,
+    "job_id": 95333731140,
+    "head_sha": "0d6765015b6480857783917e949a2844f7c612e5",
+    "artifact_id": 9282469668,
+    "artifact_name": "qmg1-silver-models-and-reports",
+    "artifact_size_bytes": 6236516,
+    "artifact_sha256": "edbe3995d502b8bb8ec405fdfe27c090c6b7246f3f794b35841c9cb8c8f35b6d"
+  },
+  "data": {
+    "metal": "silver",
+    "source": "HistData",
+    "price_side": "bid",
+    "unit": "USD/kg",
+    "m1_rows": 5820023,
+    "duplicates_skipped": 0,
+    "malformed_skipped": 0,
+    "first_timestamp_utc": "2009-05-03T22:00:00Z",
+    "last_timestamp_utc": "2026-08-14T21:58:00Z",
+    "model_feature_timestamp_utc": "2026-08-14T21:00:00+00:00",
+    "current_usd_per_kg": 2077.324037
+  },
+  "validation": {
+    "method": "expanding walk-forward with target-time purge",
+    "folds": 5,
+    "operational_acceptance_rule": "A model must improve out-of-sample MAE versus the persistence/no-change baseline before it may be considered operational.",
+    "accepted_horizons": [],
+    "rejected_horizons": [2, 4, 8, 12, 24, 72, 168, 360, 720],
+    "metrics": [
+      {"horizon_hours": 2, "rows_total": 101975, "rows_validation_total": 84975, "mae_usd_per_kg": 3.308886686457982, "rmse_usd_per_kg": 8.665599013237294, "smape_pct": 0.35451358458367793, "directional_accuracy_pct": 51.25272138864372, "persistence_mae_usd_per_kg": 3.2043380656075318, "improvement_vs_persistence_pct": -3.262721308109791},
+      {"horizon_hours": 4, "rows_total": 101966, "rows_validation_total": 84970, "mae_usd_per_kg": 4.8246032050739185, "rmse_usd_per_kg": 12.246997360511418, "smape_pct": 0.5166050128468666, "directional_accuracy_pct": 51.090973284688715, "persistence_mae_usd_per_kg": 4.530239596269272, "improvement_vs_persistence_pct": -6.497749237083614},
+      {"horizon_hours": 8, "rows_total": 101962, "rows_validation_total": 84965, "mae_usd_per_kg": 7.014793654727323, "rmse_usd_per_kg": 17.036974654821552, "smape_pct": 0.7507975701847086, "directional_accuracy_pct": 50.71382333902194, "persistence_mae_usd_per_kg": 6.499693916377331, "improvement_vs_persistence_pct": -7.924984545073592},
+      {"horizon_hours": 12, "rows_total": 101958, "rows_validation_total": 84965, "mae_usd_per_kg": 8.825985655734527, "rmse_usd_per_kg": 20.851982095727323, "smape_pct": 0.9544180423863773, "directional_accuracy_pct": 50.68675336903431, "persistence_mae_usd_per_kg": 7.996373701453538, "improvement_vs_persistence_pct": -10.374852217451853},
+      {"horizon_hours": 24, "rows_total": 101967, "rows_validation_total": 84970, "mae_usd_per_kg": 13.017869502564116, "rmse_usd_per_kg": 30.80013862003291, "smape_pct": 1.3926491905152323, "directional_accuracy_pct": 50.17653289396258, "persistence_mae_usd_per_kg": 11.332287573637753, "improvement_vs_persistence_pct": -14.874154207377543},
+      {"horizon_hours": 72, "rows_total": 101921, "rows_validation_total": 84930, "mae_usd_per_kg": 21.682571678058313, "rmse_usd_per_kg": 49.28744112880734, "smape_pct": 2.391078248151477, "directional_accuracy_pct": 49.247615683504065, "persistence_mae_usd_per_kg": 18.496961607924174, "improvement_vs_persistence_pct": -17.22234244552581},
+      {"horizon_hours": 168, "rows_total": 101878, "rows_validation_total": 84895, "mae_usd_per_kg": 32.88664584060532, "rmse_usd_per_kg": 68.22249587020481, "smape_pct": 3.6539170066969757, "directional_accuracy_pct": 49.33270510630779, "persistence_mae_usd_per_kg": 28.207632372813475, "improvement_vs_persistence_pct": -16.58775683811548},
+      {"horizon_hours": 360, "rows_total": 101732, "rows_validation_total": 84775, "mae_usd_per_kg": 50.08483945278761, "rmse_usd_per_kg": 95.07818212107408, "smape_pct": 5.625890094312473, "directional_accuracy_pct": 49.58065467413742, "persistence_mae_usd_per_kg": 42.13180143950457, "improvement_vs_persistence_pct": -18.876567679410773},
+      {"horizon_hours": 720, "rows_total": 101483, "rows_validation_total": 84565, "mae_usd_per_kg": 69.37707099711919, "rmse_usd_per_kg": 123.0127263499355, "smape_pct": 7.905743900975796, "directional_accuracy_pct": 48.301306687163716, "persistence_mae_usd_per_kg": 57.55954335926211, "improvement_vs_persistence_pct": -20.530961415202896}
+    ]
+  },
+  "experimental_predictions": [
+    {"horizon_hours": 2, "target_timestamp_utc": "2026-08-14T23:00:00+00:00", "predicted_usd_per_kg": 2079.6479215664485, "interval_80_low": 2069.221467625218, "interval_80_high": 2090.7006533628028, "predicted_change_pct": 0.11186914150402849},
+    {"horizon_hours": 4, "target_timestamp_utc": "2026-08-15T01:00:00+00:00", "predicted_usd_per_kg": 2079.360938088357, "interval_80_low": 2064.244091783104, "interval_80_high": 2095.639635879621, "predicted_change_pct": 0.09805408554839357},
+    {"horizon_hours": 8, "target_timestamp_utc": "2026-08-15T05:00:00+00:00", "predicted_usd_per_kg": 2079.5428624739297, "interval_80_low": 2056.9399564112778, "interval_80_high": 2103.5430439530537, "predicted_change_pct": 0.10681171711344195},
+    {"horizon_hours": 12, "target_timestamp_utc": "2026-08-15T09:00:00+00:00", "predicted_usd_per_kg": 2085.439131157762, "interval_80_low": 2056.2049966709683, "interval_80_high": 2116.1540560239237, "predicted_change_pct": 0.3906513386078059},
+    {"horizon_hours": 24, "target_timestamp_utc": "2026-08-15T21:00:00+00:00", "predicted_usd_per_kg": 2088.228476679156, "interval_80_low": 2045.7892687925012, "interval_80_high": 2133.883291020864, "predicted_change_pct": 0.5249272373945013},
+    {"horizon_hours": 72, "target_timestamp_utc": "2026-08-17T21:00:00+00:00", "predicted_usd_per_kg": 2061.1574230164647, "interval_80_low": 1986.1584590179002, "interval_80_high": 2136.3099149636605, "predicted_change_pct": -0.7782422816847823},
+    {"horizon_hours": 168, "target_timestamp_utc": "2026-08-21T21:00:00+00:00", "predicted_usd_per_kg": 2037.3203844985458, "interval_80_low": 1928.1315318780707, "interval_80_high": 2153.775260944181, "predicted_change_pct": -1.9257300155841817},
+    {"horizon_hours": 360, "target_timestamp_utc": "2026-08-29T21:00:00+00:00", "predicted_usd_per_kg": 2091.401206546732, "interval_80_low": 1916.7805170733534, "interval_80_high": 2275.6985708641478, "predicted_change_pct": 0.6776588195196442},
+    {"horizon_hours": 720, "target_timestamp_utc": "2026-09-13T21:00:00+00:00", "predicted_usd_per_kg": 2184.092602057445, "interval_80_low": 1906.1599719902108, "interval_80_high": 2436.535713997329, "predicted_change_pct": 5.139716440755038}
+  ],
+  "note": "Predictions are retained for reproducibility only. Every trained horizon underperformed the persistence/no-change baseline out of sample, so none is approved for operational use."
+}
