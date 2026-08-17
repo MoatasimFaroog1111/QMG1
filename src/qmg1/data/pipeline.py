@@ -40,15 +40,6 @@ class MetalsDataPipeline:
         # During August 2026, stop at the latest completed UTC day.
         return min(REQUESTED_END_EXCLUSIVE, datetime.now(timezone.utc).date())
 
-    @staticmethod
-    def _yearly_chunks(start: date, end_exclusive: date):
-        cursor = start
-        while cursor < end_exclusive:
-            next_year = date(cursor.year + 1, 1, 1)
-            chunk_end = min(next_year, end_exclusive)
-            yield cursor, chunk_end
-            cursor = chunk_end
-
     def _download_metal(
         self,
         metal: MetalSpec,
@@ -58,7 +49,11 @@ class MetalsDataPipeline:
         files: list[Path] = []
         failures: list[dict[str, str]] = []
 
-        for chunk_start, chunk_stop in self._yearly_chunks(start, end_exclusive):
+        for chunk_start, chunk_stop in self.provider.chunk_ranges(
+            metal,
+            start,
+            end_exclusive,
+        ):
             try:
                 files.append(self.provider.download(metal, chunk_start, chunk_stop))
             except Exception as exc:
