@@ -220,7 +220,12 @@ export class DashboardController {
     );
     setText("result-strategy", result.active_strategy || "—");
     setText("result-challenger", result.selected_challenger || "—");
-    setText("result-directional", formatPercent(result.validation_directional_accuracy_pct));
+    setText(
+      "result-directional",
+      result.active_strategy === "persistence"
+        ? "غير منطبق"
+        : formatPercent(result.validation_directional_accuracy_pct),
+    );
     setText(
       "result-improvement",
       formatPercent(result.validation_improvement_vs_persistence_pct),
