@@ -23,6 +23,7 @@ class HealthResponse(BaseModel):
     models_available: bool
     target_data_available: bool
     hourly_context_available: bool
+    live_market_data_enabled: bool
 
 
 class PredictionRequest(BaseModel):
