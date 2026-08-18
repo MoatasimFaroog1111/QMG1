@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <meta name="description" content="QMG1 professional precious-metals forecasting dashboard in USD/kg.">
+  <title>QMG1 | لوحة التنبؤ الاحترافية</title>
+  <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">تجاوز إلى المحتوى</a>
+
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="/" aria-label="QMG1 الرئيسية">
+        <span class="brand-mark" aria-hidden="true">
+          <span class="brand-mark-core">Q</span>
+        </span>
+        <span class="brand-copy">
+          <strong>QMG1</strong>
+          <small>Metals Forecasting</small>
+        </span>
+      </a>
+
+      <nav class="topnav" aria-label="التنقل الرئيسي">
+        <a href="#overview">نظرة عامة</a>
+        <a href="#forecast">التنبؤ</a>
+        <a href="#system">حالة النظام</a>
+        <a href="/docs" target="_blank" rel="noreferrer">API Docs</a>
+      </nav>
+
+      <div class="topbar-actions">
+        <div class="live-pill" id="api-live-pill" role="status" aria-live="polite">
+          <span class="live-dot"></span>
+          <span id="api-live-text">جاري التحقق</span>
+        </div>
+        <button class="icon-button" id="theme-toggle" type="button" aria-label="تبديل المظهر" title="تبديل المظهر">
+          <svg class="sun-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-6v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main-content">
+    <section class="hero shell" id="overview">
+      <div class="hero-copy">
+        <div class="eyebrow">
+          <span class="eyebrow-dot"></span>
+          Train Once · Persist · Load & Predict
+        </div>
+        <h1>توقعات المعادن، <span>بوضوح يمكن تدقيقه.</span></h1>
+        <p>
+          لوحة واحدة لفهم حالة النظام، اختيار المعدن والأفق الزمني، وقراءة النتيجة
+          بوحدة <bdi>USD/kg</bdi> دون خلط التدريب بوقت التنبؤ.
+        </p>
+        <div class="hero-actions">
+          <a class="primary-action" href="#forecast">
+            ابدأ التنبؤ
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+          </a>
+          <a class="secondary-action" href="/docs" target="_blank" rel="noreferrer">فتح Swagger API</a>
+        </div>
+      </div>
+
+      <aside class="hero-console" aria-label="ملخص النظام">
+        <div class="console-header">
+          <span>QMG1 Runtime</span>
+          <span class="console-badge">Production</span>
+        </div>
+        <div class="console-metric">
+          <span>وحدة التسعير</span>
+          <strong>USD / kg</strong>
+        </div>
+        <div class="console-metric">
+          <span>آفاق التنبؤ</span>
+          <strong>9 Horizons</strong>
+        </div>
+        <div class="console-metric">
+          <span>المعمارية</span>
+          <strong>Persisted Inference</strong>
+        </div>
+        <div class="console-line" aria-hidden="true"></div>
+        <div class="console-foot">
+          <span class="pulse-dot"></span>
+          <span id="hero-health-label">Connecting to API...</span>
+        </div>
+      </aside>
+    </section>
+
+    <section class="status-strip shell" aria-label="حالة مكونات النظام">
+      <article class="status-chip" data-health-key="api">
+        <span class="status-icon status-icon-api">API</span>
+        <span class="status-copy">
+          <small>الخدمة</small>
+          <strong id="status-api">جاري الفحص</strong>
+        </span>
+        <span class="status-indicator pending" id="indicator-api"></span>
+      </article>
+      <article class="status-chip" data-health-key="models">
+        <span class="status-icon">M</span>
+        <span class="status-copy">
+          <small>الموديلات</small>
+          <strong id="status-models">—</strong>
+        </span>
+        <span class="status-indicator pending" id="indicator-models"></span>
+      </article>
+      <article class="status-chip" data-health-key="data">
+        <span class="status-icon">D</span>
+        <span class="status-copy">
+          <small>بيانات الهدف</small>
+          <strong id="status-data">—</strong>
+        </span>
+        <span class="status-indicator pending" id="indicator-data"></span>
+      </article>
+      <article class="status-chip" data-health-key="context">
+        <span class="status-icon">X</span>
+        <span class="status-copy">
+          <small>السياق الخارجي</small>
+          <strong id="status-context">—</strong>
+        </span>
+        <span class="status-indicator pending" id="indicator-context"></span>
+      </article>
+    </section>
+
+    <section class="workspace shell" id="forecast">
+      <div class="workspace-main">
+        <article class="panel prediction-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="section-kicker">Forecast workspace</span>
+              <h2>إنشاء توقع جديد</h2>
+              <p>اختر المعدن والأفق. النظام يستخدم آخر Dataset وArtifact متاحين على الخادم.</p>
+            </div>
+            <span class="panel-step">01</span>
+          </div>
+
+          <form id="prediction-form" class="prediction-form" novalidate>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">المعدن</span>
+                <span class="select-shell">
+                  <select id="metal-select" name="metal" required>
+                    <option value="silver">الفضة · XAG</option>
+                    <option value="gold">الذهب · XAU</option>
+                    <option value="platinum">البلاتينيوم · XPT</option>
+                    <option value="palladium">البلاديوم · XPD</option>
+                  </select>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+                </span>
+              </label>
+
+              <label class="field">
+                <span class="field-label">الأفق الزمني</span>
+                <span class="select-shell">
+                  <select id="horizon-select" name="horizon_hours" required>
+                    <option value="2">ساعتان · 2h</option>
+                    <option value="4">4 ساعات · 4h</option>
+                    <option value="8">8 ساعات · 8h</option>
+                    <option value="12">12 ساعة · 12h</option>
+                    <option value="24">يوم · 24h</option>
+                    <option value="72">3 أيام · 72h</option>
+                    <option value="168">أسبوع · 7d</option>
+                    <option value="360">15 يومًا · 15d</option>
+                    <option value="720">شهر · 30d</option>
+                  </select>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+                </span>
+              </label>
+            </div>
+
+            <div class="horizon-shortcuts" aria-label="اختصارات الآفاق">
+              <button type="button" data-horizon="2" class="horizon-button active">2h</button>
+              <button type="button" data-horizon="4" class="horizon-button">4h</button>
+              <button type="button" data-horizon="8" class="horizon-button">8h</button>
+              <button type="button" data-horizon="12" class="horizon-button">12h</button>
+              <button type="button" data-horizon="24" class="horizon-button">24h</button>
+              <button type="button" data-horizon="72" class="horizon-button">72h</button>
+              <button type="button" data-horizon="168" class="horizon-button">7d</button>
+              <button type="button" data-horizon="360" class="horizon-button">15d</button>
+              <button type="button" data-horizon="720" class="horizon-button">30d</button>
+            </div>
+
+            <div class="form-note">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.8 2.9 17a2 2 0 0 0 1.7 3h14.8a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z"/></svg>
+              <span>التوقع يعتمد على البيانات والموديلات المحفوظة؛ لا يحدث تدريب عند الضغط على الزر.</span>
+            </div>
+
+            <div id="prediction-error" class="alert alert-error" role="alert" hidden></div>
+
+            <button class="predict-button" id="predict-button" type="submit">
+              <span class="button-label">تشغيل التنبؤ</span>
+              <span class="button-loader" aria-hidden="true"></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+            </button>
+          </form>
+        </article>
+
+        <article class="panel result-panel" id="result-panel" aria-live="polite">
+          <div class="panel-heading compact">
+            <div>
+              <span class="section-kicker">Prediction result</span>
+              <h2>النتيجة</h2>
+            </div>
+            <span class="panel-step">02</span>
+          </div>
+
+          <div class="result-empty" id="result-empty">
+            <div class="result-orbit" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <h3>النتيجة ستظهر هنا</h3>
+            <p>اختر المعدن والأفق الزمني ثم شغّل التنبؤ.</p>
+          </div>
+
+          <div class="result-content" id="result-content" hidden>
+            <div class="result-hero-row">
+              <div>
+                <div class="result-symbol" id="result-symbol">XAG</div>
+                <div class="result-metal" id="result-metal">الفضة</div>
+              </div>
+              <div class="direction-badge neutral" id="result-direction">محايد</div>
+            </div>
+
+            <div class="result-price-block">
+              <span>السعر المتوقع</span>
+              <strong id="result-price">—</strong>
+              <small>USD / kg</small>
+            </div>
+
+            <div class="result-comparison">
+              <div class="comparison-item">
+                <span>السعر الحالي</span>
+                <strong id="result-current">—</strong>
+              </div>
+              <div class="comparison-item">
+                <span>التغير المتوقع</span>
+                <strong id="result-change">—</strong>
+              </div>
+              <div class="comparison-item">
+                <span>الأفق</span>
+                <strong id="result-horizon">—</strong>
+              </div>
+            </div>
+
+            <div class="range-card">
+              <div class="range-heading">
+                <span>النطاق التجريبي 80%</span>
+                <span id="result-range-text">—</span>
+              </div>
+              <div class="range-track" aria-hidden="true">
+                <span class="range-fill"></span>
+                <span class="range-marker"></span>
+              </div>
+              <p>نطاق مبني على residuals خارج العينة، وليس ضمانًا سعريًا.</p>
+            </div>
+
+            <dl class="result-details">
+              <div><dt>الاستراتيجية الفعالة</dt><dd id="result-strategy">—</dd></div>
+              <div><dt>Challenger المختار</dt><dd id="result-challenger">—</dd></div>
+              <div><dt>Directional accuracy</dt><dd id="result-directional">—</dd></div>
+              <div><dt>Improvement vs persistence</dt><dd id="result-improvement">—</dd></div>
+              <div><dt>Validation MAE</dt><dd id="result-mae">—</dd></div>
+              <div><dt>وقت الهدف</dt><dd id="result-target-time">—</dd></div>
+            </dl>
+          </div>
+        </article>
+      </div>
+
+      <aside class="workspace-side" id="system">
+        <article class="panel system-panel">
+          <div class="panel-heading compact">
+            <div>
+              <span class="section-kicker">Runtime health</span>
+              <h2>حالة النظام</h2>
+            </div>
+            <button class="refresh-button" id="health-refresh" type="button" aria-label="تحديث حالة النظام">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M18.5 9A7 7 0 0 0 6 6.5L4 9m2 6a7 7 0 0 0 12 2.5L20 15"/></svg>
+            </button>
+          </div>
+
+          <div class="health-list">
+            <div class="health-row">
+              <span class="health-label"><i class="health-dot" id="health-dot-api"></i>API</span>
+              <strong id="health-api">Checking</strong>
+            </div>
+            <div class="health-row">
+              <span class="health-label"><i class="health-dot" id="health-dot-models"></i>Persisted models</span>
+              <strong id="health-models">—</strong>
+            </div>
+            <div class="health-row">
+              <span class="health-label"><i class="health-dot" id="health-dot-data"></i>Target datasets</span>
+              <strong id="health-data">—</strong>
+            </div>
+            <div class="health-row">
+              <span class="health-label"><i class="health-dot" id="health-dot-context"></i>External context</span>
+              <strong id="health-context">—</strong>
+            </div>
+          </div>
+
+          <div class="health-foot">
+            <span>آخر فحص</span>
+            <time id="health-checked-at">—</time>
+          </div>
+        </article>
+
+        <article class="panel architecture-panel">
+          <span class="section-kicker">Architecture</span>
+          <h2>مسار إنتاجي منضبط</h2>
+          <ol class="architecture-flow">
+            <li><span>01</span><div><strong>Train</strong><small>Offline workflow</small></div></li>
+            <li><span>02</span><div><strong>Persist</strong><small>Versioned artifacts</small></div></li>
+            <li><span>03</span><div><strong>Load</strong><small>Serving boundary</small></div></li>
+            <li><span>04</span><div><strong>Predict</strong><small>No retraining</small></div></li>
+          </ol>
+        </article>
+
+        <article class="panel quick-links-panel">
+          <span class="section-kicker">Quick access</span>
+          <a href="/docs" target="_blank" rel="noreferrer"><span>Swagger UI</span><bdi>/docs</bdi></a>
+          <a href="/health" target="_blank" rel="noreferrer"><span>Health endpoint</span><bdi>/health</bdi></a>
+          <a href="/api/meta" target="_blank" rel="noreferrer"><span>API metadata</span><bdi>/api/meta</bdi></a>
+        </article>
+      </aside>
+    </section>
+
+    <section class="history-section shell" aria-labelledby="history-title">
+      <div class="section-heading-row">
+        <div>
+          <span class="section-kicker">Local activity</span>
+          <h2 id="history-title">آخر التوقعات</h2>
+          <p>تُحفظ محليًا في هذا المتصفح فقط لتسهيل المراجعة السريعة.</p>
+        </div>
+        <button class="text-button" id="clear-history" type="button">مسح السجل</button>
+      </div>
+
+      <div class="history-list" id="history-list">
+        <div class="history-empty" id="history-empty">لا توجد توقعات محفوظة بعد.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="shell footer-inner">
+      <div>
+        <strong>QMG1</strong>
+        <span>Precious Metals Forecasting Foundation</span>
+      </div>
+      <p>النتائج تقديرات إحصائية وليست ضمانًا لسعر مستقبلي أو توصية استثمارية.</p>
+    </div>
+  </footer>
+
+  <script type="module" src="/assets/js/app.js"></script>
+</body>
+</html>

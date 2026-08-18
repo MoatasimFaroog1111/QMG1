@@ -17,8 +17,8 @@ from .service import ForecastApiService, PredictionUnavailableError
 def build_router(service: ForecastApiService) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/", response_model=RootResponse)
-    def root() -> RootResponse:
+    @router.get("/api/meta", response_model=RootResponse)
+    def metadata() -> RootResponse:
         return RootResponse(
             service="QMG1",
             docs="/docs",
