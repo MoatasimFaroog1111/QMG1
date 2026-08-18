@@ -132,6 +132,7 @@ class ForecastApiService:
             "models_available": self.repository.has_any(),
             "target_data_available": self.locator.has_target_data(),
             "hourly_context_available": self.locator.has_hourly_context(),
+            "live_market_data_enabled": self.live_price_provider.configured,
         }
 
     def predict(self, request: PredictionRequest) -> dict[str, float | str | int]:
