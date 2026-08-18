@@ -13,6 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from qmg1.config import TrainingConfig
 from qmg1.ml.selective import (
     CrossFittedSelectiveRegressor,
+    CrossFittedShrinkageRegressor,
     SelectiveShrinkageRegressor,
 )
 
@@ -38,6 +39,23 @@ class HistGradientBoostingFactory:
 
     def create(self) -> HistGradientBoostingRegressor:
         return _base_hgb(self.config, self.loss)
+
+
+@dataclass(frozen=True)
+class CrossFittedShrinkageHgbFactory:
+    config: TrainingConfig
+    lookback_days: int | None = None
+
+    @property
+    def name(self) -> str:
+        return _with_lookback_name("cross_fitted_shrinkage_hgb", self.lookback_days)
+
+    def create(self) -> CrossFittedShrinkageRegressor:
+        return CrossFittedShrinkageRegressor(
+            base_estimator=_base_hgb(self.config),
+            calibration_splits=3,
+            shrinkages=(0.0, 0.02, 0.05, 0.10, 0.15, 0.25, 0.50, 0.75, 1.00),
+        )
 
 
 @dataclass(frozen=True)
@@ -146,16 +164,10 @@ def apply_training_lookback(
 
 
 def candidate_factories(config: TrainingConfig) -> tuple[RegressorFactory, ...]:
-    """Focused candidate set after empirical pruning on full Silver history.
-
-    Ridge and 2y/5y recency challengers were materially worse than Persistence
-    across the requested horizons. They remain available as components for
-    explicit experiments, but are removed from routine training. The focused
-    set keeps a cheap location baseline, the strongest fixed selective rule
-    seen in Development, and the new nested cross-fitted calibrator.
-    """
+    """Focused leakage-safe candidates centered on beating Persistence MAE."""
     return (
         MedianReturnFactory(),
+        CrossFittedShrinkageHgbFactory(config=config),
         SelectiveHistGradientBoostingFactory(
             config=config,
             activation_quantile=0.80,
