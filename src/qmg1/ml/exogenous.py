@@ -78,117 +78,294 @@ def _normalize_hourly(frame: pd.DataFrame, label: str) -> pd.DataFrame:
     normalized = frame.copy().sort_index()
     normalized = normalized[~normalized.index.duplicated(keep="last")]
     normalized["close"] = pd.to_numeric(normalized["close"], errors="coerce")
+    normalized = normalized.dropna(subset=["close"])
+    if normalized.empty:
+        raise ValueError(f"{label} hourly dataset has no usable close prices")
+    if normalized.index.tz is None:
+        normalized.index = pd.DatetimeIndex(normalized.index).tz_localize("UTC")
+    else:
+        normalized.index = pd.DatetimeIndex(normalized.index).tz_convert("UTC")
     return normalized
 
 
+def _align_backward(
+    target_index: pd.DatetimeIndex,
+    source_features: pd.DataFrame,
+    source_time_column: str,
+) -> pd.DataFrame:
+    left = pd.DataFrame({"_target_time": target_index})
+    right = source_features.copy()
+    right[source_time_column] = right.index
+    right = right.reset_index(drop=True)
+    aligned = pd.merge_asof(
+        left.sort_values("_target_time"),
+        right.sort_values(source_time_column),
+        left_on="_target_time",
+        right_on=source_time_column,
+        direction="backward",
+        allow_exact_matches=True,
+    )
+    aligned.index = target_index
+    return aligned
+
+
+def _source_age_hours(
+    target_index: pd.DatetimeIndex,
+    aligned: pd.DataFrame,
+    source_time_column: str,
+) -> pd.Series:
+    source_time = pd.to_datetime(
+        aligned[source_time_column], utc=True, errors="coerce"
+    )
+    source_time.index = target_index
+    target_time = pd.Series(target_index, index=target_index)
+    return (target_time - source_time).dt.total_seconds() / 3600.0
+
+
+def _load_hourly_csv(path: str | Path) -> tuple[pd.DataFrame, str]:
+    source = Path(path)
+    frame = pd.read_csv(source, parse_dates=["timestamp_utc"])
+    return frame.set_index("timestamp_utc").sort_index(), source.name
+
+
 class GoldSilverFeatureProvider:
+    """Causal XAU/USD context for a silver target series."""
+
     name = GOLD_SILVER_PROVIDER_NAME
 
-    def __init__(self, gold_hourly: pd.DataFrame) -> None:
-        self.gold_hourly = _normalize_hourly(gold_hourly, "gold")
+    def __init__(self, gold_hourly: pd.DataFrame, source_file: str = "") -> None:
+        self.gold_hourly = _normalize_hourly(gold_hourly, "Gold")
+        self.source_file = source_file
 
     @classmethod
-    def from_hourly_csv(cls, path: str) -> "GoldSilverFeatureProvider":
-        frame = pd.read_csv(path)
-        if "timestamp_utc" not in frame.columns:
-            raise ValueError("Gold hourly dataset is missing timestamp_utc")
-        frame["timestamp_utc"] = pd.to_datetime(frame["timestamp_utc"], utc=True)
-        close_column = "close_usd_per_kg" if "close_usd_per_kg" in frame.columns else "close"
-        frame = frame.set_index("timestamp_utc").rename(columns={close_column: "close"})
-        return cls(frame[["close"]])
-
-    def augment(
-        self,
-        features: pd.DataFrame,
-        target_hourly: pd.DataFrame,
-    ) -> pd.DataFrame:
-        result = features.copy()
-        gold = self.gold_hourly["close"].reindex(result.index, method="ffill")
-        silver = pd.to_numeric(target_hourly["close"], errors="coerce").reindex(result.index)
-
-        result["gold_close"] = gold
-        ratio = gold / silver.replace(0.0, np.nan)
-        result["gold_silver_ratio"] = ratio
-
-        for horizon in CROSS_MARKET_HORIZONS:
-            gold_return = _calendar_log_return(gold, horizon)
-            ratio_return = _calendar_log_return(ratio, horizon)
-            silver_return = _calendar_log_return(silver, horizon)
-            result[f"gold_return_{horizon}h"] = gold_return
-            result[f"gold_silver_ratio_return_{horizon}h"] = ratio_return
-            result[f"gold_minus_silver_return_{horizon}h"] = gold_return - silver_return
-
-        result["gold_silver_ratio_z_168h"] = _rolling_zscore(ratio, 168)
-        return result
+    def from_hourly_csv(cls, path: str | Path) -> "GoldSilverFeatureProvider":
+        frame, source_file = _load_hourly_csv(path)
+        return cls(frame, source_file=source_file)
 
     def metadata(self) -> dict[str, object]:
-        return {"name": self.name, "source": "gold H1", "causal_alignment": "backward"}
+        return {
+            "name": self.name,
+            "source_symbol": "XAU/USD",
+            "source_file": self.source_file,
+            "alignment": "backward_asof",
+            "future_quotes_allowed": False,
+        }
 
-
-class _SingleMarketFeatureProvider:
-    name = "single_market"
-    prefix = "market"
-
-    def __init__(self, hourly: pd.DataFrame) -> None:
-        self.hourly = _normalize_hourly(hourly, self.prefix)
+    def _gold_features(self) -> pd.DataFrame:
+        close = self.gold_hourly["close"]
+        gold = pd.DataFrame(index=close.index)
+        gold["gold_close_usd_per_kg"] = close
+        for horizon in CROSS_MARKET_HORIZONS:
+            gold[f"gold_log_return_{horizon}h"] = _calendar_log_return(close, horizon)
+        gold["gold_close_zscore_24h"] = _rolling_zscore(close, 24)
+        gold["gold_close_zscore_168h"] = _rolling_zscore(close, 168)
+        return gold
 
     def augment(
         self,
         features: pd.DataFrame,
         target_hourly: pd.DataFrame,
     ) -> pd.DataFrame:
-        result = features.copy()
-        context = self.hourly["close"].reindex(result.index, method="ffill")
-        silver = pd.to_numeric(target_hourly["close"], errors="coerce").reindex(result.index)
-        result[f"{self.prefix}_close"] = context
-        for horizon in CROSS_MARKET_HORIZONS:
-            context_return = _calendar_log_return(context, horizon)
-            silver_return = _calendar_log_return(silver, horizon)
-            result[f"{self.prefix}_return_{horizon}h"] = context_return
-            result[f"{self.prefix}_minus_silver_return_{horizon}h"] = (
-                context_return - silver_return
-            )
-        result[f"{self.prefix}_return_z_168h"] = _rolling_zscore(
-            result[f"{self.prefix}_return_24h"], 168
+        if len(features.index) == 0 or target_hourly.empty:
+            return features.copy()
+
+        target = _normalize_hourly(target_hourly, "Target")
+        aligned = _align_backward(
+            pd.DatetimeIndex(target.index), self._gold_features(), "_gold_time"
         )
-        return result
+        result = features.reindex(target.index).copy()
+        for column in aligned.columns:
+            if column not in {"_target_time", "_gold_time"}:
+                result[column] = pd.to_numeric(aligned[column], errors="coerce").to_numpy()
+        result["gold_source_age_hours"] = _source_age_hours(
+            pd.DatetimeIndex(target.index), aligned, "_gold_time"
+        )
+
+        silver_close = pd.to_numeric(target["close"], errors="coerce")
+        ratio = result["gold_close_usd_per_kg"] / silver_close
+        result["gold_silver_ratio"] = ratio
+        result["gold_silver_ratio_zscore_24h"] = _rolling_zscore(ratio, 24)
+        result["gold_silver_ratio_zscore_168h"] = _rolling_zscore(ratio, 168)
+        for horizon in CROSS_MARKET_HORIZONS:
+            ratio_return = _calendar_log_return(ratio, horizon)
+            silver_return = _calendar_log_return(silver_close, horizon)
+            result[f"gold_silver_ratio_log_return_{horizon}h"] = ratio_return
+            result[f"gold_minus_silver_return_{horizon}h"] = (
+                result[f"gold_log_return_{horizon}h"] - silver_return
+            )
+        return result.replace([np.inf, -np.inf], np.nan)
+
+
+class UsdIndexFeatureProvider:
+    """Causal UDX/USD (US Dollar Index) context for silver forecasts."""
+
+    name = USD_INDEX_PROVIDER_NAME
+
+    def __init__(self, udx_hourly: pd.DataFrame, source_file: str = "") -> None:
+        self.udx_hourly = _normalize_hourly(udx_hourly, "US Dollar Index")
+        self.source_file = source_file
+
+    @classmethod
+    def from_hourly_csv(cls, path: str | Path) -> "UsdIndexFeatureProvider":
+        frame, source_file = _load_hourly_csv(path)
+        return cls(frame, source_file=source_file)
 
     def metadata(self) -> dict[str, object]:
-        return {"name": self.name, "source": self.prefix, "causal_alignment": "backward"}
+        return {
+            "name": self.name,
+            "source_symbol": "UDX/USD",
+            "source_file": self.source_file,
+            "source_unit": "index_points",
+            "alignment": "backward_asof",
+            "future_quotes_allowed": False,
+        }
 
-    @classmethod
-    def _from_hourly_csv(cls, path: str):
-        frame = pd.read_csv(path)
-        if "timestamp_utc" not in frame.columns:
-            raise ValueError(f"{cls.prefix} hourly dataset is missing timestamp_utc")
-        frame["timestamp_utc"] = pd.to_datetime(frame["timestamp_utc"], utc=True)
-        close_column = "close_native" if "close_native" in frame.columns else "close"
-        frame = frame.set_index("timestamp_utc").rename(columns={close_column: "close"})
-        return cls(frame[["close"]])
+    def _udx_features(self) -> pd.DataFrame:
+        close = self.udx_hourly["close"]
+        udx = pd.DataFrame(index=close.index)
+        udx["udx_close"] = close
+        for horizon in CROSS_MARKET_HORIZONS:
+            ret = _calendar_log_return(close, horizon)
+            udx[f"udx_log_return_{horizon}h"] = ret
+            udx[f"usd_pressure_{horizon}h"] = -ret
+        udx["udx_close_zscore_24h"] = _rolling_zscore(close, 24)
+        udx["udx_close_zscore_168h"] = _rolling_zscore(close, 168)
+        return udx
+
+    def augment(
+        self,
+        features: pd.DataFrame,
+        target_hourly: pd.DataFrame,
+    ) -> pd.DataFrame:
+        if len(features.index) == 0 or target_hourly.empty:
+            return features.copy()
+        target = _normalize_hourly(target_hourly, "Target")
+        aligned = _align_backward(
+            pd.DatetimeIndex(target.index), self._udx_features(), "_udx_time"
+        )
+        result = features.reindex(target.index).copy()
+        for column in aligned.columns:
+            if column not in {"_target_time", "_udx_time"}:
+                result[column] = pd.to_numeric(aligned[column], errors="coerce").to_numpy()
+        result["udx_source_age_hours"] = _source_age_hours(
+            pd.DatetimeIndex(target.index), aligned, "_udx_time"
+        )
+        silver_close = pd.to_numeric(target["close"], errors="coerce")
+        for horizon in CROSS_MARKET_HORIZONS:
+            silver_return = _calendar_log_return(silver_close, horizon)
+            result[f"silver_minus_udx_return_{horizon}h"] = (
+                silver_return - result[f"udx_log_return_{horizon}h"]
+            )
+        return result.replace([np.inf, -np.inf], np.nan)
 
 
-class UsdIndexFeatureProvider(_SingleMarketFeatureProvider):
-    name = USD_INDEX_PROVIDER_NAME
-    prefix = "udx"
+class NativeMarketFeatureProvider:
+    """Reusable causal native-market context aligned backward to the target clock."""
 
-    @classmethod
-    def from_hourly_csv(cls, path: str) -> "UsdIndexFeatureProvider":
-        return cls._from_hourly_csv(path)
+    def __init__(
+        self,
+        hourly: pd.DataFrame,
+        *,
+        name: str,
+        prefix: str,
+        source_symbol: str,
+        source_unit: str,
+        label: str,
+        source_file: str = "",
+    ) -> None:
+        self.hourly = _normalize_hourly(hourly, label)
+        self.name = name
+        self.prefix = prefix
+        self.source_symbol = source_symbol
+        self.source_unit = source_unit
+        self.label = label
+        self.source_file = source_file
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "source_symbol": self.source_symbol,
+            "source_file": self.source_file,
+            "source_unit": self.source_unit,
+            "alignment": "backward_asof",
+            "future_quotes_allowed": False,
+        }
+
+    def _source_features(self) -> pd.DataFrame:
+        close = self.hourly["close"]
+        frame = pd.DataFrame(index=close.index)
+        frame[f"{self.prefix}_close"] = close
+        for horizon in CROSS_MARKET_HORIZONS:
+            frame[f"{self.prefix}_log_return_{horizon}h"] = _calendar_log_return(
+                close, horizon
+            )
+        frame[f"{self.prefix}_close_zscore_24h"] = _rolling_zscore(close, 24)
+        frame[f"{self.prefix}_close_zscore_168h"] = _rolling_zscore(close, 168)
+        return frame
+
+    def augment(
+        self,
+        features: pd.DataFrame,
+        target_hourly: pd.DataFrame,
+    ) -> pd.DataFrame:
+        if len(features.index) == 0 or target_hourly.empty:
+            return features.copy()
+        target = _normalize_hourly(target_hourly, "Target")
+        source_time = f"_{self.prefix}_time"
+        aligned = _align_backward(
+            pd.DatetimeIndex(target.index), self._source_features(), source_time
+        )
+        result = features.reindex(target.index).copy()
+        for column in aligned.columns:
+            if column not in {"_target_time", source_time}:
+                result[column] = pd.to_numeric(aligned[column], errors="coerce").to_numpy()
+        result[f"{self.prefix}_source_age_hours"] = _source_age_hours(
+            pd.DatetimeIndex(target.index), aligned, source_time
+        )
+        target_close = pd.to_numeric(target["close"], errors="coerce")
+        for horizon in CROSS_MARKET_HORIZONS:
+            target_return = _calendar_log_return(target_close, horizon)
+            result[f"silver_minus_{self.prefix}_return_{horizon}h"] = (
+                target_return - result[f"{self.prefix}_log_return_{horizon}h"]
+            )
+        return result.replace([np.inf, -np.inf], np.nan)
 
 
-class SpxFeatureProvider(_SingleMarketFeatureProvider):
+class SpxFeatureProvider(NativeMarketFeatureProvider):
     name = SPX_PROVIDER_NAME
-    prefix = "spx"
+
+    def __init__(self, hourly: pd.DataFrame, source_file: str = "") -> None:
+        super().__init__(
+            hourly,
+            name=self.name,
+            prefix="spx",
+            source_symbol="SPX/USD",
+            source_unit="index_points",
+            label="S&P 500",
+            source_file=source_file,
+        )
 
     @classmethod
-    def from_hourly_csv(cls, path: str) -> "SpxFeatureProvider":
-        return cls._from_hourly_csv(path)
+    def from_hourly_csv(cls, path: str | Path) -> "SpxFeatureProvider":
+        frame, source_file = _load_hourly_csv(path)
+        return cls(frame, source_file=source_file)
 
 
-class WtiFeatureProvider(_SingleMarketFeatureProvider):
+class WtiFeatureProvider(NativeMarketFeatureProvider):
     name = WTI_PROVIDER_NAME
-    prefix = "wti"
+
+    def __init__(self, hourly: pd.DataFrame, source_file: str = "") -> None:
+        super().__init__(
+            hourly,
+            name=self.name,
+            prefix="wti",
+            source_symbol="WTI/USD",
+            source_unit="usd_per_barrel",
+            label="WTI Crude Oil",
+            source_file=source_file,
+        )
 
     @classmethod
-    def from_hourly_csv(cls, path: str) -> "WtiFeatureProvider":
-        return cls._from_hourly_csv(path)
+    def from_hourly_csv(cls, path: str | Path) -> "WtiFeatureProvider":
+        frame, source_file = _load_hourly_csv(path)
+        return cls(frame, source_file=source_file)
