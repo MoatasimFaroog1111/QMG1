@@ -108,27 +108,35 @@ export class DashboardController {
 
   #renderHealth(health) {
     const models = Boolean(health.models_available);
-    const data = Boolean(health.target_data_available);
+    const persistedData = Boolean(health.target_data_available);
+    const liveMarket = Boolean(health.live_market_data_enabled);
+    const servingData = persistedData || liveMarket;
     const context = Boolean(health.hourly_context_available);
 
     setText("status-api", "Online");
     setText("status-models", models ? "Ready" : "غير محمّلة");
-    setText("status-data", data ? "Ready" : "غير متاحة");
+    setText(
+      "status-data",
+      liveMarket ? "Live Feed" : persistedData ? "Ready" : "غير متاحة",
+    );
     setText("status-context", context ? "Ready" : "غير متاح");
 
     setIndicator("indicator-api", "ok");
     setIndicator("indicator-models", models ? "ok" : "warn");
-    setIndicator("indicator-data", data ? "ok" : "warn");
+    setIndicator("indicator-data", servingData ? "ok" : "warn");
     setIndicator("indicator-context", context ? "ok" : "warn");
 
     setText("health-api", "Online");
     setText("health-models", models ? "Ready" : "Missing");
-    setText("health-data", data ? "Ready" : "Missing");
-    setText("health-context", context ? "Ready" : "Missing");
+    setText(
+      "health-data",
+      liveMarket ? "Live Feed" : persistedData ? "Ready" : "Missing",
+    );
+    setText("health-context", context ? "Ready" : "Optional");
 
     setHealthDot("health-dot-api", "ok");
     setHealthDot("health-dot-models", models ? "ok" : "warn");
-    setHealthDot("health-dot-data", data ? "ok" : "warn");
+    setHealthDot("health-dot-data", servingData ? "ok" : "warn");
     setHealthDot("health-dot-context", context ? "ok" : "warn");
 
     const livePill = get("api-live-pill");
@@ -138,7 +146,9 @@ export class DashboardController {
 
     const heroHealth = get("hero-health-label");
     heroHealth.parentElement.classList.add("online");
-    heroHealth.textContent = models && data ? "Inference runtime ready" : "API ready · artifacts pending";
+    heroHealth.textContent = models && servingData
+      ? "Inference runtime ready"
+      : "API ready · artifacts pending";
     setText("health-checked-at", new Intl.DateTimeFormat("ar-SA", {
       hour: "2-digit",
       minute: "2-digit",
@@ -227,7 +237,10 @@ export class DashboardController {
   #friendlyError(error) {
     const message = String(error?.message || "تعذر تنفيذ التنبؤ.");
     if (error?.status === 503) {
-      return `الخدمة تعمل، لكن ملفات التنبؤ المطلوبة غير جاهزة بعد. ${message}`;
+      if (message.includes("temporarily unavailable")) {
+        return `تعذر الوصول إلى مصدر السوق الحي مؤقتًا. ${message}`;
+      }
+      return `الخدمة تعمل، لكن مورد التنبؤ المطلوب غير جاهز. ${message}`;
     }
     if (error?.status === 422) {
       return "المدخلات غير مقبولة. تحقق من المعدن والأفق الزمني.";
