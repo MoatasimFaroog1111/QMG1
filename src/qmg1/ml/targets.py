@@ -35,7 +35,7 @@ class CalendarHorizonTargetBuilder:
 
         future_values = np.full(len(feature_frame), np.nan, dtype=float)
         effective_times = np.full(
-            len(feature_frame), np.datetime64("NaT"), dtype="datetime64[ns]"
+            len(feature_frame), np.datetime64("NaT", "ns"), dtype="datetime64[ns]"
         )
 
         valid_position = positions < len(source_index)
