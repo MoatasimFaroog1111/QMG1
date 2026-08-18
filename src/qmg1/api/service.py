@@ -130,8 +130,7 @@ class ForecastApiService:
             "service": "QMG1",
             "architecture": "train-once-persist-load-predict",
             "models_available": self.repository.has_any(),
-            "target_data_available": self.live_price_provider.configured
-            or self.locator.has_target_data(),
+            "target_data_available": self.locator.has_target_data(),
             "hourly_context_available": self.locator.has_hourly_context(),
         }
 
@@ -145,7 +144,10 @@ class ForecastApiService:
         try:
             artifact = self.repository.load(request.metal, request.horizon_hours)
         except (FileNotFoundError, ValueError, OSError) as exc:
-            raise PredictionUnavailableError(str(exc)) from exc
+            raise PredictionUnavailableError(
+                f"Serving data for {request.metal} is not available because its persisted "
+                f"champion for {request.horizon_hours}h is missing: {exc}"
+            ) from exc
 
         if str(artifact.get("active_strategy")) == "persistence":
             try:
