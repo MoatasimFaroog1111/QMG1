@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from datetime import datetime
 
 import pandas as pd
 
@@ -40,38 +41,84 @@ class ForecastPredictor:
             if name == GOLD_SILVER_PROVIDER_NAME:
                 gold_path = paths.get("gold")
                 if not gold_path:
-                    raise ValueError(
-                        "This model requires a gold H1 dataset. "
-                        "Pass exogenous_csv_paths={'gold': '<XAUUSD H1 csv>', ...}."
-                    )
+                    raise ValueError("This model requires a gold H1 dataset.")
                 providers.append(GoldSilverFeatureProvider.from_hourly_csv(gold_path))
             elif name == USD_INDEX_PROVIDER_NAME:
                 udx_path = paths.get("udx")
                 if not udx_path:
-                    raise ValueError(
-                        "This model requires a UDX H1 dataset. "
-                        "Pass exogenous_csv_paths={'udx': '<UDXUSD H1 csv>', ...}."
-                    )
+                    raise ValueError("This model requires a UDX H1 dataset.")
                 providers.append(UsdIndexFeatureProvider.from_hourly_csv(udx_path))
             elif name == SPX_PROVIDER_NAME:
                 spx_path = paths.get("spx")
                 if not spx_path:
-                    raise ValueError(
-                        "This model requires an SPX H1 dataset. "
-                        "Pass exogenous_csv_paths={'spx': '<SPXUSD H1 csv>', ...}."
-                    )
+                    raise ValueError("This model requires an SPX H1 dataset.")
                 providers.append(SpxFeatureProvider.from_hourly_csv(spx_path))
             elif name == WTI_PROVIDER_NAME:
                 wti_path = paths.get("wti")
                 if not wti_path:
-                    raise ValueError(
-                        "This model requires a WTI H1 dataset. "
-                        "Pass exogenous_csv_paths={'wti': '<WTIUSD H1 csv>', ...}."
-                    )
+                    raise ValueError("This model requires a WTI H1 dataset.")
                 providers.append(WtiFeatureProvider.from_hourly_csv(wti_path))
             else:
                 raise ValueError(f"Unsupported exogenous feature provider: {name}")
         return ForecastDatasetBuilder(exogenous_providers=providers)
+
+    @staticmethod
+    def _build_result(
+        artifact: dict[str, object],
+        timestamp: pd.Timestamp,
+        current_close: float,
+        predicted_log_return: float,
+    ) -> dict[str, float | str | int]:
+        predicted_close = current_close * math.exp(predicted_log_return)
+        metrics = artifact["metrics"]
+        low_log_return = predicted_log_return + float(metrics["residual_log_return_q10"])
+        high_log_return = predicted_log_return + float(metrics["residual_log_return_q90"])
+        horizon_hours = int(artifact["horizon_hours"])
+        return {
+            "metal": str(artifact["metal"]),
+            "timestamp_utc": timestamp.isoformat(),
+            "target_timestamp_utc": (
+                timestamp + pd.Timedelta(hours=horizon_hours)
+            ).isoformat(),
+            "horizon_hours": horizon_hours,
+            "active_strategy": str(artifact.get("active_strategy", "model")),
+            "selected_challenger": str(artifact.get("selected_challenger", "unknown")),
+            "current_usd_per_kg": current_close,
+            "predicted_usd_per_kg": predicted_close,
+            "prediction_interval_80_low_usd_per_kg": current_close
+            * math.exp(low_log_return),
+            "prediction_interval_80_high_usd_per_kg": current_close
+            * math.exp(high_log_return),
+            "predicted_change_pct": (predicted_close / current_close - 1.0) * 100.0,
+            "validation_mae_usd_per_kg": float(metrics["mae_usd_per_kg"]),
+            "validation_directional_accuracy_pct": float(
+                metrics["directional_accuracy_pct"]
+            ),
+            "validation_improvement_vs_persistence_pct": float(
+                metrics["improvement_vs_persistence_pct"]
+            ),
+            "interval_note": (
+                "Empirical 10th-90th percentile of untouched holdout "
+                "log-return residuals; not a guarantee."
+            ),
+        }
+
+    def predict_live_persistence(
+        self,
+        metal: str,
+        horizon_hours: int,
+        timestamp_utc: datetime,
+        close_usd_per_kg: float,
+    ) -> dict[str, float | str | int]:
+        artifact = self.artifact_repository.load(metal, horizon_hours)
+        if str(artifact.get("active_strategy")) != "persistence":
+            raise ValueError("The active champion requires feature-based persisted inference")
+        return self._build_result(
+            artifact,
+            pd.Timestamp(timestamp_utc),
+            float(close_usd_per_kg),
+            0.0,
+        )
 
     def predict_latest(
         self,
@@ -82,9 +129,6 @@ class ForecastPredictor:
     ) -> dict[str, float | str | int]:
         artifact = self.artifact_repository.load(metal, horizon_hours)
         active_strategy = str(artifact.get("active_strategy", "model"))
-        selected_challenger = str(
-            artifact.get("selected_challenger", active_strategy)
-        )
 
         m1 = load_m1_csv(csv_path)
         hourly = resample_to_hourly(m1)
@@ -97,10 +141,7 @@ class ForecastPredictor:
             current_close = float(ready_hourly.iloc[-1]["close"])
             predicted_log_return = 0.0
         else:
-            builder = self._dataset_builder_for_artifact(
-                artifact,
-                exogenous_csv_paths,
-            )
+            builder = self._dataset_builder_for_artifact(artifact, exogenous_csv_paths)
             frame = build_features(hourly)
             for provider in builder.exogenous_providers:
                 frame = provider.augment(frame, hourly)
@@ -117,39 +158,9 @@ class ForecastPredictor:
                 artifact["model"].predict(latest[feature_columns])[0]
             )
 
-        predicted_close = current_close * math.exp(predicted_log_return)
-        metrics = artifact["metrics"]
-        low_log_return = predicted_log_return + float(
-            metrics["residual_log_return_q10"]
+        return self._build_result(
+            artifact,
+            pd.Timestamp(timestamp),
+            current_close,
+            predicted_log_return,
         )
-        high_log_return = predicted_log_return + float(
-            metrics["residual_log_return_q90"]
-        )
-        low_close = current_close * math.exp(low_log_return)
-        high_close = current_close * math.exp(high_log_return)
-        target_timestamp = timestamp + pd.Timedelta(hours=horizon_hours)
-
-        return {
-            "metal": str(artifact["metal"]),
-            "timestamp_utc": timestamp.isoformat(),
-            "target_timestamp_utc": target_timestamp.isoformat(),
-            "horizon_hours": int(artifact["horizon_hours"]),
-            "active_strategy": active_strategy,
-            "selected_challenger": selected_challenger,
-            "current_usd_per_kg": current_close,
-            "predicted_usd_per_kg": predicted_close,
-            "prediction_interval_80_low_usd_per_kg": low_close,
-            "prediction_interval_80_high_usd_per_kg": high_close,
-            "predicted_change_pct": (predicted_close / current_close - 1.0) * 100.0,
-            "validation_mae_usd_per_kg": float(metrics["mae_usd_per_kg"]),
-            "validation_directional_accuracy_pct": float(
-                metrics["directional_accuracy_pct"]
-            ),
-            "validation_improvement_vs_persistence_pct": float(
-                metrics["improvement_vs_persistence_pct"]
-            ),
-            "interval_note": (
-                "Empirical 10th-90th percentile of untouched holdout "
-                "log-return residuals; not a guarantee."
-            ),
-        }

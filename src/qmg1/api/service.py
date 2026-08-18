@@ -7,6 +7,7 @@ from pathlib import Path
 from qmg1.config import HORIZONS_HOURS
 from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.predictor import ForecastPredictor
+from qmg1.serving.live_price import DukascopyLivePriceProvider, LivePriceUnavailableError
 
 from .schemas import PredictionRequest
 
@@ -27,7 +28,7 @@ EXOGENOUS_PATTERNS = {
 
 
 class PredictionUnavailableError(RuntimeError):
-    """Raised when persisted artifacts or serving datasets are unavailable."""
+    """Raised when persisted artifacts or serving market data are unavailable."""
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class RuntimeSettings:
     models_dir: Path
     target_data_dir: Path
     hourly_context_dir: Path
+    live_cache_dir: Path | None = None
 
     @classmethod
     def from_environment(cls) -> "RuntimeSettings":
@@ -44,7 +46,10 @@ class RuntimeSettings:
         return cls(
             project_root=project_root,
             models_dir=Path(
-                os.getenv("QMG1_MODELS_DIR", str(project_root / "models"))
+                os.getenv(
+                    "QMG1_MODELS_DIR",
+                    str(project_root / "serving_artifacts" / "models"),
+                )
             ).resolve(),
             target_data_dir=Path(
                 os.getenv(
@@ -58,11 +63,14 @@ class RuntimeSettings:
                     str(project_root / "training_data" / "hourly"),
                 )
             ).resolve(),
+            live_cache_dir=Path(
+                os.getenv("QMG1_LIVE_CACHE_DIR", "/tmp/qmg1-live")
+            ).resolve(),
         )
 
 
 class ServingDataLocator:
-    """Resolve serving files without exposing arbitrary filesystem paths to callers."""
+    """Resolve optional persisted feature datasets for non-persistence champions."""
 
     def __init__(self, settings: RuntimeSettings) -> None:
         self.settings = settings
@@ -100,25 +108,30 @@ class ServingDataLocator:
 
 
 class ForecastApiService:
-    """Application service for health/status and persisted-model inference."""
+    """Application service for health/status and persisted-champion inference."""
 
-    def __init__(self, settings: RuntimeSettings) -> None:
+    def __init__(
+        self,
+        settings: RuntimeSettings,
+        live_price_provider: DukascopyLivePriceProvider | None = None,
+    ) -> None:
         self.settings = settings
         self.locator = ServingDataLocator(settings)
         self.repository = ModelArtifactRepository(settings.models_dir)
         self.predictor = ForecastPredictor(self.repository)
+        cache_root = settings.live_cache_dir or Path("/tmp/qmg1-live")
+        self.live_price_provider = live_price_provider or DukascopyLivePriceProvider(
+            cache_root
+        )
 
     def health(self) -> dict[str, object]:
-        models_available = (
-            self.settings.models_dir.is_dir()
-            and any(self.settings.models_dir.glob("**/*.joblib"))
-        )
         return {
             "status": "ok",
             "service": "QMG1",
             "architecture": "train-once-persist-load-predict",
-            "models_available": models_available,
-            "target_data_available": self.locator.has_target_data(),
+            "models_available": self.repository.has_any(),
+            "target_data_available": self.live_price_provider.configured
+            or self.locator.has_target_data(),
             "hourly_context_available": self.locator.has_hourly_context(),
         }
 
@@ -129,11 +142,33 @@ class ForecastApiService:
                 f"Unsupported horizon {request.horizon_hours}. Allowed hours: {allowed}."
             )
 
+        try:
+            artifact = self.repository.load(request.metal, request.horizon_hours)
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            raise PredictionUnavailableError(str(exc)) from exc
+
+        if str(artifact.get("active_strategy")) == "persistence":
+            try:
+                quote = self.live_price_provider.latest_quote(request.metal)
+                return self.predictor.predict_live_persistence(
+                    metal=request.metal,
+                    horizon_hours=request.horizon_hours,
+                    timestamp_utc=quote.timestamp_utc,
+                    close_usd_per_kg=quote.close_usd_per_kg,
+                )
+            except (
+                LivePriceUnavailableError,
+                FileNotFoundError,
+                ValueError,
+                OSError,
+            ) as exc:
+                raise PredictionUnavailableError(str(exc)) from exc
+
         target_csv = self.locator.target_csv(request.metal)
         if target_csv is None:
             raise PredictionUnavailableError(
-                f"Serving data for {request.metal} is not available. "
-                "Mount or restore the persisted market dataset before requesting inference."
+                f"The active {request.metal} champion requires persisted feature data, "
+                "but its serving dataset is not mounted."
             )
 
         try:
