@@ -1,0 +1,59 @@
+name: Silver Directional Experiment
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/qmg1/ml/directional.py"
+      - "src/qmg1/ml/trainer.py"
+      - "tests/test_directional_diagnostics.py"
+      - ".github/workflows/directional-experiment.yml"
+
+concurrency:
+  group: qmg1-directional-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  silver-directional:
+    if: github.head_ref == 'agent/directional-diagnostics'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Download Silver H1
+        run: python scripts/prepare_hourly_training_data.py --metal silver --cleanup-raw
+
+      - name: Download Gold context
+        run: python scripts/prepare_hourly_training_data.py --metal gold --cleanup-raw
+
+      - name: Download USD Index context
+        run: python scripts/prepare_market_series.py --series udx --cleanup-raw
+
+      - name: Download S&P 500 context
+        run: python scripts/prepare_market_series.py --series spx --cleanup-raw
+
+      - name: Train and compute directional diagnostics
+        run: python scripts/train_hourly_models.py --metal silver
+
+      - name: Print report
+        run: cat models/silver/silver_training_report.json
+
+      - name: Upload experiment artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qmg1-silver-directional-${{ github.run_id }}
+          path: models/silver/
+          if-no-files-found: error
+          retention-days: 14
