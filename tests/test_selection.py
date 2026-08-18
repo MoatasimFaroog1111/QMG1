@@ -18,7 +18,7 @@ def test_persistence_remains_champion_when_challengers_do_not_improve() -> None:
             "close": current,
             "target_2h": 0.0,
             "future_close_2h": current,
-            "target_timestamp_2h": index + pd.Timedelta(hours=2),
+            "target_timestamp_2h": index + pd.Timedelta(2, unit="h"),
         },
         index=index,
     )
