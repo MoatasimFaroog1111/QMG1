@@ -83,7 +83,7 @@ class ForecastTrainer:
 
         active_metrics = selection.active_holdout_metrics
         artifact = {
-            "schema_version": 7,
+            "schema_version": 6,
             "metal": metal,
             "horizon_hours": horizon_hours,
             "feature_columns": features,
