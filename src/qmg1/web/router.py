@@ -35,7 +35,7 @@ def build_web_router(service: ForecastApiService) -> APIRouter:
         },
     )
     def dashboard_predict(request: PredictionRequest) -> PredictionResponse:
-        """Run inference server-side without exposing the external API key to JavaScript."""
+        """Serve inference from a complete previously trained artifact; never retrain here."""
 
         try:
             result = service.predict(request)
