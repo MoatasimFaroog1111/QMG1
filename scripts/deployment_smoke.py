@@ -13,6 +13,7 @@ def request_json(
     *,
     api_key: str | None = None,
     payload: dict | None = None,
+    timeout_seconds: int = 20,
 ) -> dict:
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if api_key:
@@ -20,11 +21,13 @@ def request_json(
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = Request(f"{base_url.rstrip('/')}{path}", headers=headers, data=body)
     try:
-        with urlopen(request, timeout=20) as response:  # noqa: S310 - operator URL
+        with urlopen(
+            request, timeout=timeout_seconds
+        ) as response:  # noqa: S310 - operator URL
             if response.status != 200:
                 raise RuntimeError(f"{path} returned HTTP {response.status}")
             return json.load(response)
-    except (HTTPError, URLError) as exc:
+    except (HTTPError, TimeoutError, URLError) as exc:
         raise RuntimeError(f"deployment smoke failed for {path}: {exc}") from exc
 
 
@@ -50,6 +53,7 @@ def main() -> None:
         "/predict",
         api_key=api_key,
         payload={"metal": metal, "horizon_hours": horizon},
+        timeout_seconds=90,
     )
     if prediction.get("metal") != metal or prediction.get("horizon_hours") != horizon:
         raise SystemExit("deployment prediction contract mismatch")
@@ -70,3 +74,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
