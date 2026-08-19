@@ -21,7 +21,7 @@ export class QmgApiClient {
   }
 
   async predict(metal, horizonHours) {
-    return this.#request("/predict", {
+    return this.#request("/web/predict", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ metal, horizon_hours: Number(horizonHours) }),
