@@ -103,14 +103,14 @@ class ForecastPredictor:
             ),
         }
 
-    def predict_live_persistence(
+    def predict_live_persistence_from_artifact(
         self,
-        metal: str,
-        horizon_hours: int,
+        artifact: dict[str, object],
         timestamp_utc: datetime,
         close_usd_per_kg: float,
     ) -> dict[str, float | str | int]:
-        artifact = self.artifact_repository.load(metal, horizon_hours)
+        """Apply the persisted champion decision without loading or training anything else."""
+
         if str(artifact.get("active_strategy")) != "persistence":
             raise ValueError("The active champion requires feature-based persisted inference")
         return self._build_result(
@@ -120,14 +120,28 @@ class ForecastPredictor:
             0.0,
         )
 
-    def predict_latest(
+    def predict_live_persistence(
         self,
-        csv_path: str,
         metal: str,
         horizon_hours: int,
-        exogenous_csv_paths: Mapping[str, str] | None = None,
+        timestamp_utc: datetime,
+        close_usd_per_kg: float,
     ) -> dict[str, float | str | int]:
         artifact = self.artifact_repository.load(metal, horizon_hours)
+        return self.predict_live_persistence_from_artifact(
+            artifact,
+            timestamp_utc,
+            close_usd_per_kg,
+        )
+
+    def predict_latest_from_artifact(
+        self,
+        csv_path: str,
+        artifact: dict[str, object],
+        exogenous_csv_paths: Mapping[str, str] | None = None,
+    ) -> dict[str, float | str | int]:
+        """Predict from an already loaded persisted artifact and the latest serving features."""
+
         active_strategy = str(artifact.get("active_strategy", "model"))
 
         m1 = load_m1_csv(csv_path)
@@ -163,4 +177,18 @@ class ForecastPredictor:
             pd.Timestamp(timestamp),
             current_close,
             predicted_log_return,
+        )
+
+    def predict_latest(
+        self,
+        csv_path: str,
+        metal: str,
+        horizon_hours: int,
+        exogenous_csv_paths: Mapping[str, str] | None = None,
+    ) -> dict[str, float | str | int]:
+        artifact = self.artifact_repository.load(metal, horizon_hours)
+        return self.predict_latest_from_artifact(
+            csv_path=csv_path,
+            artifact=artifact,
+            exogenous_csv_paths=exogenous_csv_paths,
         )
