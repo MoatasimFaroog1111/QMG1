@@ -80,11 +80,15 @@ def test_dashboard_static_assets_are_mounted(tmp_path: Path) -> None:
 
     css_response = client.get("/assets/css/app.css")
     js_response = client.get("/assets/js/app.js")
+    api_js_response = client.get("/assets/js/api.js")
 
     assert css_response.status_code == 200
     assert "--accent" in css_response.text
     assert js_response.status_code == 200
     assert "DashboardController" in js_response.text
+    assert api_js_response.status_code == 200
+    assert '"/web/predict"' in api_js_response.text
+    assert "x-api-key" not in api_js_response.text.lower()
 
 
 def test_predict_returns_service_unavailable_without_persisted_data(tmp_path: Path) -> None:
@@ -92,6 +96,27 @@ def test_predict_returns_service_unavailable_without_persisted_data(tmp_path: Pa
 
     response = client.post(
         "/predict",
+        json={"metal": "silver", "horizon_hours": 2},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Prediction is temporarily unavailable."
+
+
+def test_dashboard_prediction_does_not_expose_or_require_external_api_key(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings = RuntimeSettings(
+        **{
+            **settings.__dict__,
+            "api_key": "test-secret",
+        }
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post(
+        "/web/predict",
         json={"metal": "silver", "horizon_hours": 2},
     )
 
@@ -125,6 +150,31 @@ def test_prediction_api_key_rate_limit_and_request_id(tmp_path: Path) -> None:
         json={"metal": "silver", "horizon_hours": 2},
         headers={"x-api-key": "test-secret"},
     )
+    assert first.status_code == 503
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "60"
+
+
+def test_dashboard_prediction_is_rate_limited(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings = RuntimeSettings(
+        **{
+            **settings.__dict__,
+            "api_key": "test-secret",
+            "predict_requests_per_minute": 1,
+        }
+    )
+    client = TestClient(create_app(settings))
+
+    first = client.post(
+        "/web/predict",
+        json={"metal": "silver", "horizon_hours": 2},
+    )
+    second = client.post(
+        "/web/predict",
+        json={"metal": "silver", "horizon_hours": 2},
+    )
+
     assert first.status_code == 503
     assert second.status_code == 429
     assert second.headers["retry-after"] == "60"
