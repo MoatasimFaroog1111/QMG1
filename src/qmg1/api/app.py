@@ -40,7 +40,7 @@ def create_app(settings: RuntimeSettings | None = None) -> FastAPI:
     def runtime_metrics() -> PlainTextResponse:
         return PlainTextResponse(metrics.render_prometheus())
 
-    application.include_router(build_web_router())
+    application.include_router(build_web_router(service))
     application.include_router(build_router(service))
     return application
 
