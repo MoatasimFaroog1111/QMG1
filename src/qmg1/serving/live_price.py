@@ -113,16 +113,24 @@ class DukascopyLivePriceProvider:
             if cached and now - cached[0] <= self.cache_ttl_seconds:
                 return cached[1]
 
-            end_exclusive = datetime.now(timezone.utc).date()
-            start = end_exclusive - timedelta(days=self.lookback_days)
-            daily_cache_root = self.cache_root / end_exclusive.isoformat()
+            today = datetime.now(timezone.utc).date()
+            daily_cache_root = self.cache_root / today.isoformat()
             downloader = self._downloader(daily_cache_root)
+            last_error: Exception | None = None
             try:
-                path = downloader.download(metal, start, end_exclusive)
-                quote = self._quote_from_csv(path, metal)
-                self._cache[metal_key] = (time.monotonic(), quote)
-                return quote
-            except (RuntimeError, OSError, ValueError) as exc:
+                for days_ago in range(1, self.lookback_days + 1):
+                    day = today - timedelta(days=days_ago)
+                    try:
+                        path = downloader.download(metal, day, day + timedelta(days=1))
+                        quote = self._quote_from_csv(path, metal)
+                        self._cache[metal_key] = (time.monotonic(), quote)
+                        return quote
+                    except (RuntimeError, OSError, ValueError) as exc:
+                        last_error = exc
+                raise LivePriceUnavailableError(
+                    f"No recent Dukascopy session is available for {metal.name}"
+                ) from last_error
+            except (LivePriceUnavailableError, RuntimeError, OSError, ValueError) as exc:
                 cached = self._cache.get(metal_key)
                 if cached and time.monotonic() - cached[0] <= self.stale_ttl_seconds:
                     return cached[1]
