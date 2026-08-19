@@ -31,7 +31,7 @@ class DukascopyLivePriceProvider:
     def __init__(
         self,
         cache_root: Path,
-        lookback_days: int = 7,
+        lookback_days: int = 4,
         cache_ttl_seconds: float = 60.0,
         stale_ttl_seconds: float = 300.0,
     ) -> None:
@@ -57,10 +57,10 @@ class DukascopyLivePriceProvider:
         return DirectDukascopyM1Downloader(
             raw_root=daily_cache_root,
             config=DirectDukascopyConfig(
-                timeout_seconds=15,
-                max_attempts=3,
+                timeout_seconds=4,
+                max_attempts=1,
                 base_backoff_seconds=0.5,
-                request_pause_seconds=0.05,
+                request_pause_seconds=0.0,
                 download_passes=1,
                 pass_backoff_seconds=1.0,
                 user_agent="QMG1/0.3 production-inference",
@@ -129,3 +129,4 @@ class DukascopyLivePriceProvider:
                 raise LivePriceUnavailableError(
                     f"Live Dukascopy data is temporarily unavailable for {metal.name}"
                 ) from exc
+
