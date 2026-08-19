@@ -147,7 +147,7 @@ class ServingDataLocator:
 
 
 class ForecastApiService:
-    """Application service for health/status and persisted-champion inference."""
+    """Application service for health/status and persisted trained-artifact inference."""
 
     def __init__(
         self,
@@ -174,7 +174,9 @@ class ForecastApiService:
         )
 
     def available_models(self) -> dict[str, list[int]]:
-        return self.repository.available()
+        """Expose only complete, checksum-valid artifacts produced by prior training."""
+
+        return self.repository.available_trained()
 
     def readiness(self) -> tuple[bool, list[str]]:
         available = self.available_models()
@@ -191,40 +193,38 @@ class ForecastApiService:
 
     def health(self) -> dict[str, object]:
         ready, readiness_reasons = self.readiness()
+        available_models = self.available_models()
         return {
             "status": "ok",
             "service": "QMG1",
             "architecture": "train-once-persist-load-predict",
-            "models_available": self.repository.has_any(),
+            "models_available": bool(available_models),
             "target_data_available": self.locator.has_target_data(),
             "hourly_context_available": self.locator.has_hourly_context(),
             "live_market_data_enabled": self.live_price_provider.configured,
             "ready": ready,
             "readiness_reasons": readiness_reasons,
-            "available_models": self.available_models(),
+            "available_models": available_models,
         }
 
-    def predict(self, request: PredictionRequest) -> dict[str, float | str | int]:
+    @staticmethod
+    def _validate_horizon(request: PredictionRequest) -> None:
         if request.horizon_hours not in HORIZONS_HOURS:
             allowed = ", ".join(str(value) for value in HORIZONS_HOURS)
             raise PredictionUnavailableError(
                 f"Unsupported horizon {request.horizon_hours}. Allowed hours: {allowed}."
             )
 
-        try:
-            artifact = self.repository.load(request.metal, request.horizon_hours)
-        except (FileNotFoundError, ValueError, OSError) as exc:
-            raise PredictionUnavailableError(
-                f"Serving data for {request.metal} is not available because its persisted "
-                f"champion for {request.horizon_hours}h is missing: {exc}"
-            ) from exc
-
+    def _predict_with_artifact(
+        self,
+        request: PredictionRequest,
+        artifact: dict[str, object],
+    ) -> dict[str, float | str | int]:
         if str(artifact.get("active_strategy")) == "persistence":
             try:
                 quote = self.live_price_provider.latest_quote(request.metal)
-                result = self.predictor.predict_live_persistence(
-                    metal=request.metal,
-                    horizon_hours=request.horizon_hours,
+                result = self.predictor.predict_live_persistence_from_artifact(
+                    artifact=artifact,
                     timestamp_utc=quote.timestamp_utc,
                     close_usd_per_kg=quote.close_usd_per_kg,
                 )
@@ -241,17 +241,32 @@ class ForecastApiService:
         target_csv = self.locator.target_csv(request.metal)
         if target_csv is None:
             raise PredictionUnavailableError(
-                f"The active {request.metal} champion requires persisted feature data, "
+                f"The trained {request.metal} champion requires persisted feature data, "
                 "but its serving dataset is not mounted."
             )
 
         try:
-            return self.predictor.predict_latest(
+            return self.predictor.predict_latest_from_artifact(
                 csv_path=str(target_csv),
-                metal=request.metal,
-                horizon_hours=request.horizon_hours,
+                artifact=artifact,
                 exogenous_csv_paths=self.locator.exogenous_csvs() or None,
             )
         except (FileNotFoundError, ValueError, OSError) as exc:
             raise PredictionUnavailableError(str(exc)) from exc
 
+    def predict(self, request: PredictionRequest) -> dict[str, float | str | int]:
+        """Predict only from a complete artifact created by a previous training run."""
+
+        self._validate_horizon(request)
+        try:
+            artifact = self.repository.load_trained(
+                request.metal,
+                request.horizon_hours,
+            )
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            raise PredictionUnavailableError(
+                f"Previously trained artifact for {request.metal} "
+                f"{request.horizon_hours}h is unavailable: {exc}"
+            ) from exc
+
+        return self._predict_with_artifact(request, artifact)
