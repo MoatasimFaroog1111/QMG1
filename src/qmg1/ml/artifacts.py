@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import io
@@ -16,6 +18,7 @@ class ModelArtifactRepository:
     """Persistence boundary for trained artifacts and compact serving champions."""
 
     TRAINED_BUNDLE_GLOB = "trained_models_*.zip"
+    ENCODED_BUNDLE_FIRST_PART_GLOB = "trained_models_*.zip.b64.part000"
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -32,6 +35,16 @@ class ModelArtifactRepository:
             return []
         return sorted(
             directory.glob(self.TRAINED_BUNDLE_GLOB),
+            key=lambda path: (path.stat().st_mtime, path.name),
+            reverse=True,
+        )
+
+    def encoded_bundle_first_parts_for(self, metal: str) -> list[Path]:
+        directory = self.root / metal
+        if not directory.is_dir():
+            return []
+        return sorted(
+            directory.glob(self.ENCODED_BUNDLE_FIRST_PART_GLOB),
             key=lambda path: (path.stat().st_mtime, path.name),
             reverse=True,
         )
@@ -68,14 +81,33 @@ class ModelArtifactRepository:
         temporary.write_text(f"{self._digest(path)}  {path.name}\n", encoding="utf-8")
         os.replace(temporary, checksum_path)
 
-    def _verify_checksum(self, path: Path) -> None:
-        checksum_path = path.with_suffix(path.suffix + ".sha256")
+    @staticmethod
+    def _expected_checksum(checksum_path: Path) -> str:
         if not checksum_path.exists():
             raise ValueError(f"Missing artifact checksum: {checksum_path}")
-        expected = checksum_path.read_text(encoding="utf-8").split()[0]
+        fields = checksum_path.read_text(encoding="utf-8").split()
+        if not fields:
+            raise ValueError(f"Invalid artifact checksum: {checksum_path}")
+        return fields[0]
+
+    def _verify_checksum(self, path: Path) -> None:
+        checksum_path = path.with_suffix(path.suffix + ".sha256")
+        expected = self._expected_checksum(checksum_path)
         actual = self._digest(path)
         if not hmac.compare_digest(expected, actual):
             raise ValueError(f"Artifact checksum mismatch: {path}")
+
+    @classmethod
+    def _verify_bytes_checksum(
+        cls,
+        data: bytes,
+        checksum_path: Path,
+        source_name: str,
+    ) -> None:
+        expected = cls._expected_checksum(checksum_path)
+        actual = hashlib.sha256(data).hexdigest()
+        if not hmac.compare_digest(expected, actual):
+            raise ValueError(f"Artifact checksum mismatch: {source_name}")
 
     @staticmethod
     def _validate_artifact(artifact: object, source: object) -> dict[str, Any]:
@@ -87,41 +119,109 @@ class ModelArtifactRepository:
         self._verify_checksum(path)
         return self._validate_artifact(joblib.load(path), path)
 
-    def _bundle_horizons(self, metal: str, path: Path) -> set[int]:
-        self._verify_checksum(path)
+    @staticmethod
+    def _archive_horizons(metal: str, archive: zipfile.ZipFile) -> set[int]:
         prefix = f"{metal}_"
         suffix = "h.joblib"
         horizons: set[int] = set()
-        with zipfile.ZipFile(path) as archive:
-            for member in archive.namelist():
-                name = Path(member).name
-                if not name.startswith(prefix) or not name.endswith(suffix):
-                    continue
-                encoded = name[len(prefix) : -len(suffix)]
-                try:
-                    horizons.add(int(encoded))
-                except ValueError:
-                    continue
+        for member in archive.namelist():
+            name = Path(member).name
+            if not name.startswith(prefix) or not name.endswith(suffix):
+                continue
+            encoded = name[len(prefix) : -len(suffix)]
+            try:
+                horizons.add(int(encoded))
+            except ValueError:
+                continue
         return horizons
+
+    def _bundle_horizons(self, metal: str, path: Path) -> set[int]:
+        self._verify_checksum(path)
+        with zipfile.ZipFile(path) as archive:
+            return self._archive_horizons(metal, archive)
+
+    def _read_encoded_bundle(self, first_part: Path) -> tuple[str, bytes]:
+        marker = ".b64.part"
+        if marker not in first_part.name:
+            raise ValueError(f"Invalid encoded bundle part name: {first_part}")
+        bundle_name = first_part.name.rsplit(marker, 1)[0]
+        parts = sorted(first_part.parent.glob(f"{bundle_name}.b64.part*"))
+        if not parts:
+            raise ValueError(f"Encoded bundle has no parts: {first_part}")
+
+        expected_names = [
+            f"{bundle_name}.b64.part{index:03d}" for index in range(len(parts))
+        ]
+        actual_names = [part.name for part in parts]
+        if actual_names != expected_names:
+            raise ValueError(
+                f"Encoded bundle parts are incomplete or out of sequence: {bundle_name}"
+            )
+
+        encoded = "".join(
+            part.read_text(encoding="ascii").strip() for part in parts
+        )
+        try:
+            bundle_bytes = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"Invalid base64 serving bundle: {bundle_name}") from exc
+
+        checksum_path = first_part.parent / f"{bundle_name}.sha256"
+        self._verify_bytes_checksum(
+            bundle_bytes,
+            checksum_path,
+            f"{first_part.parent}/{bundle_name}",
+        )
+        return bundle_name, bundle_bytes
+
+    def _encoded_bundle_horizons(self, metal: str, first_part: Path) -> set[int]:
+        _, bundle_bytes = self._read_encoded_bundle(first_part)
+        with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as archive:
+            return self._archive_horizons(metal, archive)
+
+    @staticmethod
+    def _load_member_from_archive(
+        archive: zipfile.ZipFile,
+        member: str,
+        source: object,
+    ) -> dict[str, Any] | None:
+        names = {Path(name).name: name for name in archive.namelist()}
+        archive_member = names.get(member)
+        if archive_member is None:
+            return None
+        artifact = joblib.load(io.BytesIO(archive.read(archive_member)))
+        return ModelArtifactRepository._validate_artifact(
+            artifact,
+            f"{source}!/{archive_member}",
+        )
 
     def _load_from_bundle(self, metal: str, horizon_hours: int) -> dict[str, Any]:
         member = f"{metal}_{horizon_hours}h.joblib"
-        bundles = self.bundle_paths_for(metal)
-        if not bundles:
+        raw_bundles = self.bundle_paths_for(metal)
+        encoded_bundles = self.encoded_bundle_first_parts_for(metal)
+
+        for bundle in raw_bundles:
+            self._verify_checksum(bundle)
+            with zipfile.ZipFile(bundle) as archive:
+                artifact = self._load_member_from_archive(archive, member, bundle)
+                if artifact is not None:
+                    return artifact
+
+        for first_part in encoded_bundles:
+            bundle_name, bundle_bytes = self._read_encoded_bundle(first_part)
+            with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as archive:
+                artifact = self._load_member_from_archive(
+                    archive,
+                    member,
+                    f"{first_part.parent}/{bundle_name}",
+                )
+                if artifact is not None:
+                    return artifact
+
+        if not raw_bundles and not encoded_bundles:
             raise FileNotFoundError(
                 f"Persisted trained model not found: {self.path_for(metal, horizon_hours)}"
             )
-
-        for bundle in bundles:
-            self._verify_checksum(bundle)
-            with zipfile.ZipFile(bundle) as archive:
-                names = {Path(name).name: name for name in archive.namelist()}
-                archive_member = names.get(member)
-                if archive_member is None:
-                    continue
-                artifact = joblib.load(io.BytesIO(archive.read(archive_member)))
-                return self._validate_artifact(artifact, f"{bundle}!/{archive_member}")
-
         raise FileNotFoundError(
             f"Persisted trained model not found for {metal} {horizon_hours}h in serving bundles"
         )
@@ -140,6 +240,7 @@ class ModelArtifactRepository:
         return (
             any(self.root.glob("**/*.joblib"))
             or any(self.root.glob(f"**/{self.TRAINED_BUNDLE_GLOB}"))
+            or any(self.root.glob(f"**/{self.ENCODED_BUNDLE_FIRST_PART_GLOB}"))
             or any(self.root.glob("**/champions.json"))
         )
 
@@ -189,6 +290,19 @@ class ModelArtifactRepository:
                 try:
                     horizons.update(self._bundle_horizons(metal_dir.name, bundle))
                 except (OSError, ValueError, zipfile.BadZipFile):
+                    continue
+
+            for first_part in self.encoded_bundle_first_parts_for(metal_dir.name):
+                try:
+                    horizons.update(
+                        self._encoded_bundle_horizons(metal_dir.name, first_part)
+                    )
+                except (
+                    OSError,
+                    ValueError,
+                    binascii.Error,
+                    zipfile.BadZipFile,
+                ):
                     continue
 
             if horizons:
