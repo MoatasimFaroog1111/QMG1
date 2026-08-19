@@ -1,4 +1,5 @@
 -r requirements.txt
-pytest>=8.3,<9
-ruff>=0.12,<1
-httpx>=0.28,<1
+pytest==8.4.2
+ruff==0.12.12
+httpx==0.28.1
+pip-audit==2.9.0

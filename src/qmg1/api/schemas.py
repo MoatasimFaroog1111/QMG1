@@ -14,6 +14,7 @@ class RootResponse(BaseModel):
     health: str
     predict: str
     forecast_horizons_hours: list[int]
+    available_models: dict[str, list[int]]
 
 
 class HealthResponse(BaseModel):
@@ -24,6 +25,9 @@ class HealthResponse(BaseModel):
     target_data_available: bool
     hourly_context_available: bool
     live_market_data_enabled: bool
+    ready: bool
+    readiness_reasons: list[str]
+    available_models: dict[str, list[int]]
 
 
 class PredictionRequest(BaseModel):
@@ -51,3 +55,4 @@ class PredictionResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+    code: str | None = None

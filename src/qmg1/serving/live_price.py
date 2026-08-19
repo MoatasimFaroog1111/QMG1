@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+import threading
+import time
 
 from qmg1.data.dukascopy_direct import DirectDukascopyConfig, DirectDukascopyM1Downloader
 from qmg1.data.metals import METALS, MetalSpec
@@ -26,12 +28,26 @@ class LiveQuote:
 class DukascopyLivePriceProvider:
     """Read the latest completed M1 close from Dukascopy for inference serving."""
 
-    def __init__(self, cache_root: Path, lookback_days: int = 7) -> None:
+    def __init__(
+        self,
+        cache_root: Path,
+        lookback_days: int = 7,
+        cache_ttl_seconds: float = 60.0,
+        stale_ttl_seconds: float = 300.0,
+    ) -> None:
         if lookback_days < 2:
             raise ValueError("lookback_days must be at least 2")
+        if cache_ttl_seconds <= 0 or stale_ttl_seconds < cache_ttl_seconds:
+            raise ValueError("live-price cache TTL values are invalid")
         self.cache_root = cache_root
         self.lookback_days = lookback_days
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self.stale_ttl_seconds = stale_ttl_seconds
         self._metals = {metal.key: metal for metal in METALS}
+        self._cache: dict[str, tuple[float, LiveQuote]] = {}
+        self._locks: dict[str, threading.Lock] = {
+            metal.key: threading.Lock() for metal in METALS
+        }
 
     @property
     def configured(self) -> bool:
@@ -86,15 +102,30 @@ class DukascopyLivePriceProvider:
 
     def latest_quote(self, metal_key: str) -> LiveQuote:
         metal = self._metal(metal_key)
-        end_exclusive = datetime.now(timezone.utc).date()
-        start = end_exclusive - timedelta(days=self.lookback_days)
+        now = time.monotonic()
+        cached = self._cache.get(metal_key)
+        if cached and now - cached[0] <= self.cache_ttl_seconds:
+            return cached[1]
 
-        daily_cache_root = self.cache_root / end_exclusive.isoformat()
-        downloader = self._downloader(daily_cache_root)
-        try:
-            path = downloader.download(metal, start, end_exclusive)
-            return self._quote_from_csv(path, metal)
-        except (RuntimeError, OSError, ValueError) as exc:
-            raise LivePriceUnavailableError(
-                f"Live Dukascopy data is temporarily unavailable for {metal.name}: {exc}"
-            ) from exc
+        with self._locks[metal_key]:
+            now = time.monotonic()
+            cached = self._cache.get(metal_key)
+            if cached and now - cached[0] <= self.cache_ttl_seconds:
+                return cached[1]
+
+            end_exclusive = datetime.now(timezone.utc).date()
+            start = end_exclusive - timedelta(days=self.lookback_days)
+            daily_cache_root = self.cache_root / end_exclusive.isoformat()
+            downloader = self._downloader(daily_cache_root)
+            try:
+                path = downloader.download(metal, start, end_exclusive)
+                quote = self._quote_from_csv(path, metal)
+                self._cache[metal_key] = (time.monotonic(), quote)
+                return quote
+            except (RuntimeError, OSError, ValueError) as exc:
+                cached = self._cache.get(metal_key)
+                if cached and time.monotonic() - cached[0] <= self.stale_ttl_seconds:
+                    return cached[1]
+                raise LivePriceUnavailableError(
+                    f"Live Dukascopy data is temporarily unavailable for {metal.name}"
+                ) from exc
