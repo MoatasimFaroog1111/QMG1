@@ -34,6 +34,13 @@ def test_health_is_boot_safe_without_models_or_market_data(tmp_path: Path) -> No
     assert payload["models_available"] is False
     assert payload["target_data_available"] is False
     assert payload["hourly_context_available"] is False
+    assert payload["ready"] is False
+    assert payload["available_models"] == {}
+
+    assert client.get("/livez").status_code == 200
+    readiness = client.get("/readyz")
+    assert readiness.status_code == 503
+    assert readiness.json()["detail"] == "Required serving artifacts are unavailable."
 
 
 def test_dashboard_is_served_at_root(tmp_path: Path) -> None:
@@ -65,6 +72,7 @@ def test_api_metadata_exposes_requested_forecast_horizons(tmp_path: Path) -> Non
         360,
         720,
     ]
+    assert response.json()["available_models"] == {}
 
 
 def test_dashboard_static_assets_are_mounted(tmp_path: Path) -> None:
@@ -88,4 +96,45 @@ def test_predict_returns_service_unavailable_without_persisted_data(tmp_path: Pa
     )
 
     assert response.status_code == 503
-    assert "Serving data for silver is not available" in response.json()["detail"]
+    assert response.json()["detail"] == "Prediction is temporarily unavailable."
+
+
+def test_prediction_api_key_rate_limit_and_request_id(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings = RuntimeSettings(
+        **{
+            **settings.__dict__,
+            "api_key": "test-secret",
+            "predict_requests_per_minute": 1,
+        }
+    )
+    client = TestClient(create_app(settings))
+
+    unauthorized = client.post("/predict", json={"metal": "silver", "horizon_hours": 2})
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["code"] == "unauthorized"
+    assert unauthorized.headers["x-request-id"]
+
+    first = client.post(
+        "/predict",
+        json={"metal": "silver", "horizon_hours": 2},
+        headers={"x-api-key": "test-secret"},
+    )
+    second = client.post(
+        "/predict",
+        json={"metal": "silver", "horizon_hours": 2},
+        headers={"x-api-key": "test-secret"},
+    )
+    assert first.status_code == 503
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "60"
+
+
+def test_metrics_endpoint_reports_requests(tmp_path: Path) -> None:
+    client = TestClient(create_app(_settings(tmp_path)))
+    client.get("/livez")
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert 'path="/livez",status="200"' in response.text

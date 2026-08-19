@@ -172,6 +172,20 @@ python -m compileall -q src scripts tests
 pytest -q
 ```
 
+## Production operation
+
+The service exposes separate operational endpoints:
+
+- `/livez` for process liveness
+- `/readyz` for traffic admission after required, checksum-valid artifacts are available
+- `/health` for detailed runtime status
+- `/metrics` for request counters
+
+Production deployments must configure `QMG1_API_KEY`. Clients pass it in `X-API-Key` when
+calling `/predict`. Configure the deployed contract with `QMG1_REQUIRED_METALS` and
+`QMG1_REQUIRED_HORIZONS`; `/api/meta` reports only artifacts actually available at runtime.
+See `docs/operations.md` for deployment, monitoring, and rollback procedures.
+
 The same checks run in GitHub Actions.
 
 ## Important modeling note
