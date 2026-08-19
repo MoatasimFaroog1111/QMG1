@@ -1,6 +1,9 @@
 name: Deployment smoke
 
 on:
+  push:
+    branches:
+      - agent/production-readiness-hardening
   workflow_dispatch:
     inputs:
       base_url:
@@ -25,4 +28,6 @@ jobs:
       - name: Verify deployed service
         env:
           QMG1_API_KEY: ${{ secrets.QMG1_API_KEY }}
-        run: python scripts/deployment_smoke.py --base-url "${{ inputs.base_url }}"
+          QMG1_BASE_URL: ${{ inputs.base_url || 'https://qmg1-production.up.railway.app' }}
+        run: python scripts/deployment_smoke.py --base-url "$QMG1_BASE_URL"
+
