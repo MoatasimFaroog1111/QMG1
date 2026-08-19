@@ -50,5 +50,7 @@ def test_silver_predict_uses_live_quote_without_training() -> None:
     assert result["current_usd_per_kg"] == 1250.0
     assert result["predicted_usd_per_kg"] == 1250.0
     assert result["predicted_change_pct"] == 0.0
+    assert result["market_data_source"] == "test"
     assert result["prediction_interval_80_low_usd_per_kg"] > 0
     assert result["prediction_interval_80_high_usd_per_kg"] > 0
+

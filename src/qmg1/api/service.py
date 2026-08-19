@@ -7,7 +7,13 @@ from pathlib import Path
 from qmg1.config import HORIZONS_HOURS
 from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.predictor import ForecastPredictor
-from qmg1.serving.live_price import DukascopyLivePriceProvider, LivePriceUnavailableError
+from qmg1.serving.live_price import (
+    BullionVaultLivePriceProvider,
+    DukascopyLivePriceProvider,
+    LivePriceProvider,
+    LivePriceUnavailableError,
+    ResilientLivePriceProvider,
+)
 
 from .schemas import PredictionRequest
 
@@ -93,7 +99,7 @@ class RuntimeSettings:
                 os.getenv("QMG1_LIVE_CACHE_TTL_SECONDS", "60")
             ),
             live_stale_ttl_seconds=float(
-                os.getenv("QMG1_LIVE_STALE_TTL_SECONDS", "300")
+                os.getenv("QMG1_LIVE_STALE_TTL_SECONDS", "86400")
             ),
             required_metals=required_metals,
             required_horizons=required_horizons,
@@ -146,15 +152,23 @@ class ForecastApiService:
     def __init__(
         self,
         settings: RuntimeSettings,
-        live_price_provider: DukascopyLivePriceProvider | None = None,
+        live_price_provider: LivePriceProvider | None = None,
     ) -> None:
         self.settings = settings
         self.locator = ServingDataLocator(settings)
         self.repository = ModelArtifactRepository(settings.models_dir)
         self.predictor = ForecastPredictor(self.repository)
         cache_root = settings.live_cache_dir or Path("/tmp/qmg1-live")
-        self.live_price_provider = live_price_provider or DukascopyLivePriceProvider(
-            cache_root,
+        self.live_price_provider = live_price_provider or ResilientLivePriceProvider(
+            providers=[
+                BullionVaultLivePriceProvider(),
+                DukascopyLivePriceProvider(
+                    cache_root / "dukascopy",
+                    cache_ttl_seconds=settings.live_cache_ttl_seconds,
+                    stale_ttl_seconds=settings.live_stale_ttl_seconds,
+                ),
+            ],
+            cache_root=cache_root / "quotes",
             cache_ttl_seconds=settings.live_cache_ttl_seconds,
             stale_ttl_seconds=settings.live_stale_ttl_seconds,
         )
@@ -208,12 +222,14 @@ class ForecastApiService:
         if str(artifact.get("active_strategy")) == "persistence":
             try:
                 quote = self.live_price_provider.latest_quote(request.metal)
-                return self.predictor.predict_live_persistence(
+                result = self.predictor.predict_live_persistence(
                     metal=request.metal,
                     horizon_hours=request.horizon_hours,
                     timestamp_utc=quote.timestamp_utc,
                     close_usd_per_kg=quote.close_usd_per_kg,
                 )
+                result["market_data_source"] = quote.source
+                return result
             except (
                 LivePriceUnavailableError,
                 FileNotFoundError,
@@ -238,3 +254,4 @@ class ForecastApiService:
             )
         except (FileNotFoundError, ValueError, OSError) as exc:
             raise PredictionUnavailableError(str(exc)) from exc
+
