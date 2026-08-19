@@ -11,6 +11,18 @@
   86400 seconds so a short upstream outage survives restarts without silently using older data.
 - Mount immutable serving artifacts with their adjacent `.sha256` files.
 
+## Prediction access model
+
+- External integrations call `POST /predict` and must send `QMG1_API_KEY` in the `X-API-Key`
+  header. The key must never be embedded in browser JavaScript or HTML.
+- The bundled browser dashboard calls the same-origin `POST /web/predict` endpoint. That route
+  invokes the forecast service inside the application process, so the external API key stays
+  server-side.
+- Both prediction routes share the same per-client sliding-window rate limiter configured by
+  `QMG1_PREDICT_REQUESTS_PER_MINUTE`.
+- `/web/predict` is intentionally excluded from the public OpenAPI schema; `/predict` remains the
+  supported contract for external programmatic clients.
+
 ## Live market data
 
 - Production inference reads the cached public BullionVault USD order book first and uses the
@@ -59,4 +71,3 @@ is external to the repository and must be verified in GitHub before a release is
 - Treat `joblib` files as executable input and accept them only from the trusted training workflow.
 - Retain training reports, checksums, source commit, dependency versions, and datasets used.
 - A checksum mismatch is an integrity incident; do not bypass it by regenerating the checksum.
-
