@@ -14,6 +14,12 @@ from fastapi.responses import JSONResponse, Response
 
 LOGGER = logging.getLogger("qmg1.http")
 
+EXTERNAL_PREDICT_PATH = "/predict"
+DASHBOARD_PREDICT_PATH = "/web/predict"
+RATE_LIMITED_PREDICTION_PATHS = frozenset(
+    {EXTERNAL_PREDICT_PATH, DASHBOARD_PREDICT_PATH}
+)
+
 
 class SlidingWindowRateLimiter:
     def __init__(self, requests: int, window_seconds: float = 60.0) -> None:
@@ -74,10 +80,15 @@ def install_operational_middleware(
     async def operational_middleware(request: Request, call_next: Callable) -> Response:
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         client_host = request.client.host if request.client else "unknown"
+        path = request.url.path
 
-        if request.url.path == "/predict":
+        if path in RATE_LIMITED_PREDICTION_PATHS:
             supplied_key = request.headers.get("x-api-key", "")
-            if api_key and not hmac.compare_digest(supplied_key, api_key):
+            if (
+                path == EXTERNAL_PREDICT_PATH
+                and api_key
+                and not hmac.compare_digest(supplied_key, api_key)
+            ):
                 response = JSONResponse(
                     status_code=401,
                     content={"detail": "Authentication required.", "code": "unauthorized"},
@@ -97,11 +108,11 @@ def install_operational_middleware(
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        metrics.observe(request.method, request.url.path, response.status_code)
+        metrics.observe(request.method, path, response.status_code)
         LOGGER.info(
             "request_complete method=%s path=%s status=%s request_id=%s client=%s",
             request.method,
-            request.url.path,
+            path,
             response.status_code,
             request_id,
             client_host,
