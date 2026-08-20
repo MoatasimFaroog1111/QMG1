@@ -114,18 +114,59 @@ class CrossFittedSelectiveRegressor(BaseEstimator, RegressorMixin):
         y_array = np.asarray(y, dtype=float)
         self._validate_parameters(len(y_array))
 
+        oof_prediction = self._run_oof_predictions(X, y_array)
+
+        (best_quantile, best_shrinkage), calibration_metrics = self._calibrate_quantile_and_shrinkage(
+            X, y_array, oof_prediction
+        )
+
+        self.calibration_persistence_mae_ = calibration_metrics["persistence_mae"]
+        self.calibration_mae_ = calibration_metrics["best_mae"]
+        self.calibration_improvement_pct_ = calibration_metrics["improvement_pct"]
+        self.selected_activation_quantile_ = best_quantile
+        self.selected_shrinkage_ = best_shrinkage
+
+        self.activation_threshold_ = self._refit_and_set_threshold(
+            X, y, y_array, best_quantile, best_shrinkage
+        )
+        return self
+
+    def _run_oof_predictions(self, X, y_array: np.ndarray) -> np.ndarray:
+        """Compute out-of-fold predictions from a causal expanding-window TimeSeriesSplit.
+
+        Each inner fold trains a fresh ``clone(base_estimator)`` on the chronologically
+        preceding slice and predicts the held-out validation slice. The full array
+        carries ``NaN`` for indices that no fold covered (e.g. the first fold's
+        preceding target cannot be predicted from earlier data).
+        """
+
         oof_prediction = np.full(len(y_array), np.nan, dtype=float)
         splitter = TimeSeriesSplit(n_splits=self.calibration_splits)
         for train_index, validation_index in splitter.split(np.arange(len(y_array))):
             estimator = clone(self.base_estimator)
             estimator.fit(
                 _slice_rows(X, train_index),
-                _slice_rows(y, train_index),
+                _slice_rows(y_array, train_index),
             )
             oof_prediction[validation_index] = np.asarray(
                 estimator.predict(_slice_rows(X, validation_index)),
                 dtype=float,
             )
+        return oof_prediction
+
+    def _calibrate_quantile_and_shrinkage(
+        self,
+        X,
+        y_array: np.ndarray,
+        oof_prediction: np.ndarray,
+    ) -> tuple[tuple[float | None, float], dict[str, float]]:
+        """Pick the (quantile, shrinkage) pair whose shrunken predictions beat persistence.
+
+        Returns the chosen pair and a small metrics dictionary capturing the persistence
+        baseline MAE, the best calibrated MAE, and the relative improvement percentage.
+        All scoring happens on inner OOF predictions only — outer validation and final
+        holdout data are never inspected here.
+        """
 
         calibration_mask = np.isfinite(oof_prediction) & np.isfinite(y_array)
         if not calibration_mask.any():
@@ -159,31 +200,42 @@ class CrossFittedSelectiveRegressor(BaseEstimator, RegressorMixin):
                     best_quantile = float(quantile)
                     best_shrinkage = float(shrinkage)
 
-        self.calibration_persistence_mae_ = float(persistence_mae)
-        self.calibration_mae_ = float(best_mae)
-        self.calibration_improvement_pct_ = (
+        improvement_pct = (
             (persistence_mae - best_mae) / persistence_mae * 100.0
             if persistence_mae > 0.0
             else 0.0
         )
-        self.selected_activation_quantile_ = best_quantile
-        self.selected_shrinkage_ = best_shrinkage
+        return (best_quantile, best_shrinkage), {
+            "persistence_mae": float(persistence_mae),
+            "best_mae": float(best_mae),
+            "improvement_pct": float(improvement_pct),
+        }
+
+    def _refit_and_set_threshold(
+        self,
+        X,
+        y,
+        y_array: np.ndarray,
+        best_quantile: float | None,
+        best_shrinkage: float,
+    ) -> float:
+        """Refit ``base_estimator`` on the full target window and derive the activation threshold.
+
+        The threshold is the chosen ``best_quantile`` of in-sample absolute predictions.
+        When the calibration grid found no pair that beats persistence, the threshold
+        is set to ``+inf`` so the production predictor abstains on every example.
+        """
 
         self.estimator_ = clone(self.base_estimator)
         self.estimator_.fit(X, y)
 
         if best_quantile is None or best_shrinkage <= 0.0:
-            self.activation_threshold_ = float("inf")
-            return self
+            return float("inf")
 
+        del y_array  # unused after split — kept for call-site readability
         full_train_prediction = np.asarray(self.estimator_.predict(X), dtype=float)
         finite = np.abs(full_train_prediction[np.isfinite(full_train_prediction)])
-        self.activation_threshold_ = (
-            float(np.quantile(finite, best_quantile))
-            if finite.size
-            else float("inf")
-        )
-        return self
+        return float(np.quantile(finite, best_quantile)) if finite.size else float("inf")
 
     def predict(self, X):
         if not hasattr(self, "estimator_"):

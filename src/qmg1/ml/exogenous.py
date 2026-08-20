@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -259,8 +260,73 @@ class UsdIndexFeatureProvider:
         return result.replace([np.inf, -np.inf], np.nan)
 
 
+def _build_aligned_result(
+    features: pd.DataFrame,
+    target_hourly: pd.DataFrame,
+    source_features: pd.DataFrame,
+    source_time_column: str,
+    prefix: str,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Reindex ``features`` onto the target clock and copy aligned source columns in.
+
+    Returns the augmented ``features`` frame and the target ``close`` series for
+    downstream derived features (e.g. ratio vs. silver). All data is causally
+    aligned backward; no future quotes are introduced.
+    """
+
+    if len(features.index) == 0 or target_hourly.empty:
+        return features.copy(), pd.Series(dtype=float)
+
+    target = _normalize_hourly(target_hourly, "Target")
+    aligned = _align_backward(
+        pd.DatetimeIndex(target.index), source_features, source_time_column
+    )
+    result = features.reindex(target.index).copy()
+    for column in aligned.columns:
+        if column not in {"_target_time", source_time_column}:
+            result[column] = pd.to_numeric(aligned[column], errors="coerce").to_numpy()
+    result[f"{prefix}_source_age_hours"] = _source_age_hours(
+        pd.DatetimeIndex(target.index), aligned, source_time_column
+    )
+    target_close = pd.to_numeric(target["close"], errors="coerce")
+    return result, target_close
+
+
+def _add_cross_market_returns(
+    result: pd.DataFrame,
+    target_close: pd.Series,
+    prefix: str,
+    *,
+    source_return_columns: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """Stamp ``target_minus_{prefix}_return_{h}h`` columns for each cross-market horizon.
+
+    ``source_return_columns`` lets a provider name the precise source return series
+    when the default ``{prefix}_log_return_{h}h`` is not what it built (e.g. the
+    dollar-pressure proxy on the UDX provider).
+    """
+
+    for horizon in CROSS_MARKET_HORIZONS:
+        target_return = _calendar_log_return(target_close, horizon)
+        if source_return_columns is None:
+            source_return = result[f"{prefix}_log_return_{horizon}h"]
+        else:
+            source_return = result[source_return_columns[horizon - 1]] if horizon - 1 < len(source_return_columns) else result[f"{prefix}_log_return_{horizon}h"]
+        result[f"silver_minus_{prefix}_return_{horizon}h"] = (
+            target_return - source_return
+        )
+    return result.replace([np.inf, -np.inf], np.nan)
+
+
 class NativeMarketFeatureProvider:
-    """Reusable causal native-market context aligned backward to the target clock."""
+    """Reusable causal native-market context aligned backward to the target clock.
+
+    Concrete providers (SPX, WTI, USD Index, …) inherit the constructor,
+    ``from_hourly_csv``, ``metadata``, source-feature construction, and aligned
+    result reindexing. Subclasses customise only the ``_source_features`` (rare —
+    e.g. USD Index exposes a ``usd_pressure_{h}h`` column in addition to log
+    returns) and the column-prefix interpretation.
+    """
 
     def __init__(
         self,
@@ -308,27 +374,14 @@ class NativeMarketFeatureProvider:
         features: pd.DataFrame,
         target_hourly: pd.DataFrame,
     ) -> pd.DataFrame:
-        if len(features.index) == 0 or target_hourly.empty:
-            return features.copy()
-        target = _normalize_hourly(target_hourly, "Target")
-        source_time = f"_{self.prefix}_time"
-        aligned = _align_backward(
-            pd.DatetimeIndex(target.index), self._source_features(), source_time
+        result, target_close = _build_aligned_result(
+            features,
+            target_hourly,
+            self._source_features(),
+            f"_{self.prefix}_time",
+            self.prefix,
         )
-        result = features.reindex(target.index).copy()
-        for column in aligned.columns:
-            if column not in {"_target_time", source_time}:
-                result[column] = pd.to_numeric(aligned[column], errors="coerce").to_numpy()
-        result[f"{self.prefix}_source_age_hours"] = _source_age_hours(
-            pd.DatetimeIndex(target.index), aligned, source_time
-        )
-        target_close = pd.to_numeric(target["close"], errors="coerce")
-        for horizon in CROSS_MARKET_HORIZONS:
-            target_return = _calendar_log_return(target_close, horizon)
-            result[f"silver_minus_{self.prefix}_return_{horizon}h"] = (
-                target_return - result[f"{self.prefix}_log_return_{horizon}h"]
-            )
-        return result.replace([np.inf, -np.inf], np.nan)
+        return _add_cross_market_returns(result, target_close, self.prefix)
 
 
 class SpxFeatureProvider(NativeMarketFeatureProvider):

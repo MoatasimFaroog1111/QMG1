@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from qmg1._logging import configure_logging
 from qmg1.web.router import STATIC_DIR, build_web_router
 
 from .routes import build_router
@@ -14,11 +15,12 @@ from .service import ForecastApiService, RuntimeSettings
 
 
 def create_app(settings: RuntimeSettings | None = None) -> FastAPI:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
     runtime_settings = settings or RuntimeSettings.from_environment()
+    # Call ``configure_logging`` early so the request-id-aware formatter is in
+    # place before the first FastAPI access log line is emitted. The function
+    # wipes any handlers ``logging.basicConfig`` may have left behind and
+    # installs a single StreamHandler with the QMG1 format.
+    configure_logging(level=logging.INFO)
     service = ForecastApiService(runtime_settings)
 
     application = FastAPI(

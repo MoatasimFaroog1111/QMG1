@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,9 @@ from qmg1.serving.live_price import (
 )
 
 from .schemas import PredictionRequest
+
+
+LOGGER = logging.getLogger("qmg1.api.service")
 
 
 TARGET_PATTERNS = {
@@ -189,7 +193,15 @@ class ForecastApiService:
         reasons = [f"missing_model:{item}" for item in missing]
         if self.settings.production_mode and not self.settings.api_key:
             reasons.append("missing_configuration:QMG1_API_KEY")
-        return not reasons, reasons
+        ready = not reasons
+        if not ready:
+            LOGGER.warning(
+                "readiness_not_ready missing=%d production_mode=%s api_key_set=%s",
+                len(missing),
+                self.settings.production_mode,
+                bool(self.settings.api_key),
+            )
+        return ready, reasons
 
     def health(self) -> dict[str, object]:
         ready, readiness_reasons = self.readiness()
@@ -220,7 +232,13 @@ class ForecastApiService:
         request: PredictionRequest,
         artifact: dict[str, object],
     ) -> dict[str, float | str | int]:
-        if str(artifact.get("active_strategy")) == "persistence":
+        active_strategy = str(artifact.get("active_strategy"))
+        if active_strategy == "persistence":
+            LOGGER.info(
+                "predict_persistence_path metal=%s horizon_hours=%s source_artifact=persistence",
+                request.metal,
+                request.horizon_hours,
+            )
             try:
                 quote = self.live_price_provider.latest_quote(request.metal)
                 result = self.predictor.predict_live_persistence_from_artifact(
@@ -229,6 +247,15 @@ class ForecastApiService:
                     close_usd_per_kg=quote.close_usd_per_kg,
                 )
                 result["market_data_source"] = quote.source
+                LOGGER.info(
+                    "predict_quoted metal=%s horizon_hours=%s quote_source=%s "
+                    "current_usd_per_kg=%.4f predicted_usd_per_kg=%.4f",
+                    request.metal,
+                    request.horizon_hours,
+                    quote.source,
+                    result["current_usd_per_kg"],
+                    result["predicted_usd_per_kg"],
+                )
                 return result
             except (
                 LivePriceUnavailableError,
@@ -236,27 +263,64 @@ class ForecastApiService:
                 ValueError,
                 OSError,
             ) as exc:
+                LOGGER.warning(
+                    "predict_live_quote_failed metal=%s horizon_hours=%s exc_type=%s",
+                    request.metal,
+                    request.horizon_hours,
+                    type(exc).__name__,
+                )
                 raise PredictionUnavailableError(str(exc)) from exc
 
+        LOGGER.info(
+            "predict_model_path metal=%s horizon_hours=%s selected_challenger=%s",
+            request.metal,
+            request.horizon_hours,
+            artifact.get("selected_challenger"),
+        )
         target_csv = self.locator.target_csv(request.metal)
         if target_csv is None:
+            LOGGER.error(
+                "predict_missing_target_csv metal=%s models_dir=%s",
+                request.metal,
+                self.settings.models_dir,
+            )
             raise PredictionUnavailableError(
                 f"The trained {request.metal} champion requires persisted feature data, "
                 "but its serving dataset is not mounted."
             )
 
         try:
-            return self.predictor.predict_latest_from_artifact(
+            result = self.predictor.predict_latest_from_artifact(
                 csv_path=str(target_csv),
                 artifact=artifact,
                 exogenous_csv_paths=self.locator.exogenous_csvs() or None,
             )
+            LOGGER.info(
+                "predict_completed metal=%s horizon_hours=%s current_usd_per_kg=%.4f "
+                "predicted_usd_per_kg=%.4f",
+                request.metal,
+                request.horizon_hours,
+                result["current_usd_per_kg"],
+                result["predicted_usd_per_kg"],
+            )
+            return result
         except (FileNotFoundError, ValueError, OSError) as exc:
+            LOGGER.warning(
+                "predict_model_failed metal=%s horizon_hours=%s exc_type=%s",
+                request.metal,
+                request.horizon_hours,
+                type(exc).__name__,
+            )
             raise PredictionUnavailableError(str(exc)) from exc
 
     def predict(self, request: PredictionRequest) -> dict[str, float | str | int]:
         """Predict only from a complete artifact created by a previous training run."""
 
+        LOGGER.info(
+            "predict_request metal=%s horizon_hours=%s",
+            request.metal,
+            request.horizon_hours,
+        )
         self._validate_horizon(request)
         try:
             artifact = self.repository.load_trained(
@@ -264,6 +328,12 @@ class ForecastApiService:
                 request.horizon_hours,
             )
         except (FileNotFoundError, ValueError, OSError) as exc:
+            LOGGER.warning(
+                "predict_artifact_unavailable metal=%s horizon_hours=%s exc_type=%s",
+                request.metal,
+                request.horizon_hours,
+                type(exc).__name__,
+            )
             raise PredictionUnavailableError(
                 f"Previously trained artifact for {request.metal} "
                 f"{request.horizon_hours}h is unavailable: {exc}"
