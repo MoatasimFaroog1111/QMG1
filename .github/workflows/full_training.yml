@@ -17,6 +17,7 @@ on:
     branches:
       - "agent/metals-ml-foundation"
       - "agent/full-training-execution"
+      - "agent/metric-shrinkage"
     paths:
       - ".github/triggers/full-training"
 

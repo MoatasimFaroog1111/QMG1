@@ -38,7 +38,7 @@ def _calendar_log_return(series: pd.Series, horizon_hours: int) -> pd.Series:
     left = pd.DataFrame(
         {
             "_position": np.arange(len(clean)),
-            "_query_time": clean.index - pd.Timedelta(hours=horizon_hours),
+            "_query_time": clean.index - pd.Timedelta(int(horizon_hours), unit="h"),
         }
     ).sort_values("_query_time")
     right = pd.DataFrame(

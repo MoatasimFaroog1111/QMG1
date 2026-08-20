@@ -12,7 +12,9 @@ class CalendarHorizonTargetBuilder:
     """
 
     def __init__(self, max_forward_tolerance_hours: int = 72) -> None:
-        self.max_forward_tolerance = pd.Timedelta(hours=max_forward_tolerance_hours)
+        self.max_forward_tolerance = pd.Timedelta(
+            int(max_forward_tolerance_hours), unit="h"
+        )
 
     def attach(
         self,
@@ -27,12 +29,14 @@ class CalendarHorizonTargetBuilder:
         if source_close.empty:
             raise ValueError("No hourly close prices are available")
 
-        requested_times = feature_frame.index + pd.Timedelta(hours=horizon_hours)
+        requested_times = feature_frame.index + pd.Timedelta(int(horizon_hours), unit="h")
         source_index = source_close.index
         positions = source_index.searchsorted(requested_times, side="left")
 
         future_values = np.full(len(feature_frame), np.nan, dtype=float)
-        effective_times = np.full(len(feature_frame), np.datetime64("NaT"), dtype="datetime64[ns]")
+        effective_times = np.full(
+            len(feature_frame), np.datetime64("NaT", "ns"), dtype="datetime64[ns]"
+        )
 
         valid_position = positions < len(source_index)
         valid_rows = np.flatnonzero(valid_position)
@@ -43,7 +47,9 @@ class CalendarHorizonTargetBuilder:
             requested_ts = requested_times[row_idx]
             if effective_ts - requested_ts <= self.max_forward_tolerance:
                 future_values[row_idx] = float(source_close.iloc[source_pos])
-                effective_times[row_idx] = effective_ts.tz_convert("UTC").tz_localize(None).to_datetime64()
+                effective_times[row_idx] = (
+                    effective_ts.tz_convert("UTC").tz_localize(None).to_datetime64()
+                )
 
         result = feature_frame.copy()
         future_col = f"future_close_{horizon_hours}h"

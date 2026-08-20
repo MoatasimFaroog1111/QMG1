@@ -73,6 +73,7 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
     development_candidates = artifact["selection"]["development_candidates"]
     assert [item["model_name"] for item in development_candidates] == [
         "median_return",
+        "cross_fitted_shrinkage_hgb",
         "selective_hgb_q80_s25",
         "cross_fitted_selective_hgb",
     ]

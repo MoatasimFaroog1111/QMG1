@@ -74,6 +74,105 @@ class SelectiveShrinkageRegressor(BaseEstimator, RegressorMixin):
         return np.where(active, raw * self.shrinkage, 0.0)
 
 
+class CrossFittedShrinkageRegressor(BaseEstimator, RegressorMixin):
+    """Calibrate one global shrinkage factor from causal OOF predictions.
+
+    The factor is selected only from expanding-window out-of-fold predictions
+    inside the outer training fold. A zero factor is always a candidate, so the
+    estimator conservatively collapses to Persistence when no learned signal
+    improves price MAE on its own calibration history.
+    """
+
+    def __init__(
+        self,
+        base_estimator: RegressorMixin,
+        calibration_splits: int = 3,
+        shrinkages: Sequence[float] = (
+            0.0,
+            0.02,
+            0.05,
+            0.10,
+            0.15,
+            0.25,
+            0.50,
+            0.75,
+            1.00,
+        ),
+    ) -> None:
+        self.base_estimator = base_estimator
+        self.calibration_splits = calibration_splits
+        self.shrinkages = shrinkages
+
+    def _validate_parameters(self, n_rows: int) -> None:
+        if self.calibration_splits < 2:
+            raise ValueError("calibration_splits must be >= 2")
+        if n_rows <= self.calibration_splits + 1:
+            raise ValueError("Not enough rows for cross-fitted calibration")
+        if not self.shrinkages:
+            raise ValueError("shrinkages must not be empty")
+        if any(not 0.0 <= value <= 1.0 for value in self.shrinkages):
+            raise ValueError("shrinkages must be in [0, 1]")
+        if 0.0 not in self.shrinkages:
+            raise ValueError("shrinkages must include 0.0 as the persistence fallback")
+
+    def fit(self, X, y):
+        y_array = np.asarray(y, dtype=float)
+        self._validate_parameters(len(y_array))
+
+        oof_prediction = np.full(len(y_array), np.nan, dtype=float)
+        splitter = TimeSeriesSplit(n_splits=self.calibration_splits)
+        for train_index, validation_index in splitter.split(np.arange(len(y_array))):
+            estimator = clone(self.base_estimator)
+            estimator.fit(_slice_rows(X, train_index), _slice_rows(y, train_index))
+            oof_prediction[validation_index] = np.asarray(
+                estimator.predict(_slice_rows(X, validation_index)),
+                dtype=float,
+            )
+
+        calibration_mask = np.isfinite(oof_prediction) & np.isfinite(y_array)
+        if not calibration_mask.any():
+            raise RuntimeError("Cross-fitted calibration produced no OOF predictions")
+
+        calibration_indices = np.flatnonzero(calibration_mask)
+        X_calibration = _slice_rows(X, calibration_indices)
+        y_calibration = y_array[calibration_mask]
+        raw_calibration = oof_prediction[calibration_mask]
+
+        best_shrinkage = 0.0
+        best_mae = _price_mae(
+            X_calibration,
+            y_calibration,
+            np.zeros_like(y_calibration),
+        )
+        persistence_mae = best_mae
+
+        for shrinkage in self.shrinkages:
+            prediction = raw_calibration * float(shrinkage)
+            mae = _price_mae(X_calibration, y_calibration, prediction)
+            if mae < best_mae:
+                best_mae = mae
+                best_shrinkage = float(shrinkage)
+
+        self.calibration_persistence_mae_ = float(persistence_mae)
+        self.calibration_mae_ = float(best_mae)
+        self.calibration_improvement_pct_ = (
+            (persistence_mae - best_mae) / persistence_mae * 100.0
+            if persistence_mae > 0.0
+            else 0.0
+        )
+        self.selected_shrinkage_ = best_shrinkage
+
+        self.estimator_ = clone(self.base_estimator)
+        self.estimator_.fit(X, y)
+        return self
+
+    def predict(self, X):
+        if not hasattr(self, "estimator_"):
+            raise RuntimeError("CrossFittedShrinkageRegressor must be fitted first")
+        raw = np.asarray(self.estimator_.predict(X), dtype=float)
+        return raw * self.selected_shrinkage_
+
+
 class CrossFittedSelectiveRegressor(BaseEstimator, RegressorMixin):
     """Calibrate abstention and shrinkage from causal OOF training predictions.
 

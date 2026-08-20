@@ -78,7 +78,7 @@ class ForecastPredictor:
             "metal": str(artifact["metal"]),
             "timestamp_utc": timestamp.isoformat(),
             "target_timestamp_utc": (
-                timestamp + pd.Timedelta(hours=horizon_hours)
+                timestamp + pd.Timedelta(horizon_hours, unit="h")
             ).isoformat(),
             "horizon_hours": horizon_hours,
             "active_strategy": str(artifact.get("active_strategy", "model")),

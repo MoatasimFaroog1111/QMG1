@@ -38,7 +38,6 @@ def test_cross_fitted_inner_predictions_are_strictly_forward() -> None:
     )
     model.fit(X, y)
 
-    # The first three fit/predict pairs are the inner TimeSeriesSplit folds.
     for train_max, validation_min in zip(
         CausalProbeRegressor.fit_maxima[:3],
         CausalProbeRegressor.predict_minima[:3],
@@ -56,7 +55,6 @@ def test_cross_fitted_calibration_optimizes_price_mae_from_oof_only() -> None:
             "close": np.full(rows, 1_500.0),
         }
     )
-    # A stable causal relationship gives the OOF calibrator a real signal.
     y = pd.Series(signal * 0.01)
 
     model = CrossFittedSelectiveRegressor(
@@ -79,6 +77,7 @@ def test_routine_candidate_set_is_empirically_pruned() -> None:
     names = [factory.name for factory in candidate_factories(TrainingConfig())]
     assert names == [
         "median_return",
+        "cross_fitted_shrinkage_hgb",
         "selective_hgb_q80_s25",
         "cross_fitted_selective_hgb",
     ]
