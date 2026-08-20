@@ -286,11 +286,11 @@ class ForecastApiService:
             decision.governance_strategy,
         )
 
+        if not decision.feature_data_required:
+            return self._predict_with_live_quote(request, artifact)
+
         target_csv = self.locator.target_csv(request.metal)
         if target_csv is None:
-            if not decision.feature_data_required:
-                return self._predict_with_live_quote(request, artifact)
-
             LOGGER.error(
                 "predict_missing_target_csv metal=%s models_dir=%s strategy=%s",
                 request.metal,
