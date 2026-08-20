@@ -11,6 +11,8 @@ from collections.abc import Callable
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
+from qmg1._logging import bind_request_id, reset_request_id
+
 
 LOGGER = logging.getLogger("qmg1.http")
 
@@ -79,44 +81,47 @@ def install_operational_middleware(
     @application.middleware("http")
     async def operational_middleware(request: Request, call_next: Callable) -> Response:
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        token = bind_request_id(request_id)
         client_host = request.client.host if request.client else "unknown"
         path = request.url.path
-
-        if path in RATE_LIMITED_PREDICTION_PATHS:
-            supplied_key = request.headers.get("x-api-key", "")
-            if (
-                path == EXTERNAL_PREDICT_PATH
-                and api_key
-                and not hmac.compare_digest(supplied_key, api_key)
-            ):
-                response = JSONResponse(
-                    status_code=401,
-                    content={"detail": "Authentication required.", "code": "unauthorized"},
-                )
-            elif not limiter.allow(client_host):
-                response = JSONResponse(
-                    status_code=429,
-                    content={"detail": "Prediction rate limit exceeded.", "code": "rate_limited"},
-                    headers={"Retry-After": "60"},
-                )
+        try:
+            if path in RATE_LIMITED_PREDICTION_PATHS:
+                supplied_key = request.headers.get("x-api-key", "")
+                if (
+                    path == EXTERNAL_PREDICT_PATH
+                    and api_key
+                    and not hmac.compare_digest(supplied_key, api_key)
+                ):
+                    response = JSONResponse(
+                        status_code=401,
+                        content={"detail": "Authentication required.", "code": "unauthorized"},
+                    )
+                elif not limiter.allow(client_host):
+                    response = JSONResponse(
+                        status_code=429,
+                        content={"detail": "Prediction rate limit exceeded.", "code": "rate_limited"},
+                        headers={"Retry-After": "60"},
+                    )
+                else:
+                    response = await call_next(request)
             else:
                 response = await call_next(request)
-        else:
-            response = await call_next(request)
 
-        response.headers["X-Request-ID"] = request_id
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        metrics.observe(request.method, path, response.status_code)
-        LOGGER.info(
-            "request_complete method=%s path=%s status=%s request_id=%s client=%s",
-            request.method,
-            path,
-            response.status_code,
-            request_id,
-            client_host,
-        )
-        return response
+            response.headers["X-Request-ID"] = request_id
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            metrics.observe(request.method, path, response.status_code)
+            LOGGER.info(
+                "request_complete method=%s path=%s status=%s request_id=%s client=%s",
+                request.method,
+                path,
+                response.status_code,
+                request_id,
+                client_host,
+            )
+            return response
+        finally:
+            reset_request_id(token)
 
     return metrics

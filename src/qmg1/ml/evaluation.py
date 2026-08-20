@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
@@ -10,6 +11,9 @@ from sklearn.model_selection import TimeSeriesSplit
 
 from qmg1.config import TrainingConfig
 from qmg1.ml.model_factory import RegressorFactory, apply_training_lookback
+
+
+LOGGER = logging.getLogger("qmg1.ml.evaluation")
 
 
 @dataclass(frozen=True)
@@ -143,12 +147,15 @@ class WalkForwardEvaluator:
             predicted_return_parts.append(predicted_log_return)
             completed_folds += 1
 
-            print(
-                f"  [CV {fold}/{self.config.cv_splits}] "
-                f"model={self.model_factory.name} "
-                f"train={len(train):,} validation={len(valid):,} "
-                f"purged={len(candidate_train) - len(purged_train):,} "
-                f"lookback_days={self.model_factory.lookback_days or 'all'}"
+            LOGGER.info(
+                "[CV %d/%d] model=%s train=%d validation=%d purged=%d lookback_days=%s",
+                fold,
+                self.config.cv_splits,
+                self.model_factory.name,
+                len(train),
+                len(valid),
+                len(candidate_train) - len(purged_train),
+                self.model_factory.lookback_days or "all",
             )
 
         if not predicted_close_parts:
