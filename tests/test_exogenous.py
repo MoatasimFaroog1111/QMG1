@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-from qmg1.ml.dataset import ForecastDatasetBuilder
-from qmg1.ml.exogenous import (
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / "src"))
+
+from qmg1.ml.dataset import ForecastDatasetBuilder  # noqa: E402
+from qmg1.ml.exogenous import (  # noqa: E402
     GoldSilverFeatureProvider,
     SpxFeatureProvider,
     UsdIndexFeatureProvider,
