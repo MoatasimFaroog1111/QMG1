@@ -52,27 +52,9 @@ export class DashboardController {
 
   async init() {
     this.#restoreTheme();
-    this.#configureStaticCopy();
     this.#bindEvents();
     this.#renderHistory();
     await Promise.allSettled([this.refreshHealth(), this.#loadMetadata()]);
-  }
-
-  #configureStaticCopy() {
-    const rangeTitle = document.querySelector(".range-heading span:first-child");
-    const rangeNote = document.querySelector(".range-card p");
-    if (rangeTitle) rangeTitle.textContent = "نطاق عدم اليقين التاريخي 80%";
-    if (rangeNote) {
-      rangeNote.textContent =
-        "نطاق تاريخي مشتق من أخطاء الموديل على بيانات Holdout، وهو مستقل عن دقة الاتجاه.";
-    }
-
-    const strategyLabel = get("result-strategy").previousElementSibling;
-    const governanceLabel = get("result-challenger").previousElementSibling;
-    const directionalLabel = get("result-directional").previousElementSibling;
-    if (strategyLabel) strategyLabel.textContent = "موديل التنبؤ الفعلي";
-    if (governanceLabel) governanceLabel.textContent = "قرار الحوكمة";
-    if (directionalLabel) directionalLabel.textContent = "دقة الاتجاه التاريخية";
   }
 
   #bindEvents() {
