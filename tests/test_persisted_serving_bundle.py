@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -38,6 +41,16 @@ def _serving_settings() -> RuntimeSettings:
     )
 
 
+def _expected_live_model_price(artifact: dict[str, object], current: float) -> float:
+    feature_columns = list(artifact["feature_columns"])
+    features = pd.DataFrame(
+        [{column: 0.0 for column in feature_columns}],
+        columns=feature_columns,
+    )
+    predicted_log_return = float(artifact["model"].predict(features)[0])
+    return current * math.exp(predicted_log_return)
+
+
 def test_committed_training_bundle_contains_every_silver_horizon() -> None:
     repository = ModelArtifactRepository(ROOT / "serving_artifacts" / "models")
 
@@ -50,6 +63,8 @@ def test_committed_training_bundle_contains_every_silver_horizon() -> None:
         assert artifact["horizon_hours"] == horizon
         assert artifact["trained_at_utc"]
         assert artifact["active_strategy"] == "persistence"
+        assert artifact["selected_challenger"] == "median_return"
+        assert "selection" in artifact
         assert "model" in artifact
         assert "metrics" in artifact
 
@@ -59,14 +74,24 @@ def test_prediction_service_uses_previously_trained_artifact_without_retraining(
         _serving_settings(),
         live_price_provider=FixedQuoteProvider(),
     )
+    artifact = service.repository.load_trained("silver", 2)
 
     result = service.predict(PredictionRequest(metal="silver", horizon_hours=2))
 
     assert result["metal"] == "silver"
     assert result["horizon_hours"] == 2
-    assert result["active_strategy"] == "persistence"
+    assert result["active_strategy"] == "median_return"
+    assert result["serving_strategy"] == "median_return"
+    assert result["governance_strategy"] == "persistence"
     assert result["selected_challenger"] == "median_return"
     assert result["current_usd_per_kg"] == 2050.0
-    assert result["predicted_usd_per_kg"] == 2050.0
-    assert result["validation_mae_usd_per_kg"] > 0
+    assert math.isclose(
+        float(result["predicted_usd_per_kg"]),
+        _expected_live_model_price(artifact, 2050.0),
+        rel_tol=1e-12,
+    )
+    assert (
+        result["validation_mae_usd_per_kg"]
+        == artifact["selection"]["challenger_holdout_metrics"]["mae_usd_per_kg"]
+    )
     assert result["market_data_source"] == "test-live-quote"
