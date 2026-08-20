@@ -61,9 +61,9 @@ class ForecastTrainer:
         final_model = winning_factory.create()
         final_model.fit(final_train[features], final_train[target_col])
 
-        active_metrics = selection.active_holdout_metrics
+        model_metrics = selection.challenger_holdout_metrics
         artifact = {
-            "schema_version": 6,
+            "schema_version": 7,
             "metal": metal,
             "horizon_hours": horizon_hours,
             "feature_columns": features,
@@ -79,14 +79,18 @@ class ForecastTrainer:
                 "causal exogenous alignment"
             ),
             "exogenous_features": self.dataset_builder.exogenous_metadata(),
+            # Kept for compatibility: this is the audit promotion decision, not serving.
             "active_strategy": selection.active_strategy,
+            "governance_strategy": selection.active_strategy,
+            "serving_strategy": selection.selected_model_name,
             "selected_challenger": selection.selected_model_name,
             "selection": selection.to_dict(),
-            "metrics": asdict(active_metrics),
+            "model_metrics": asdict(model_metrics),
+            "metrics": asdict(model_metrics),
             "model": final_model,
         }
         self.artifact_repository.save(metal, horizon_hours, artifact)
-        return active_metrics
+        return model_metrics
 
     def train_one(
         self,
@@ -125,7 +129,8 @@ class ForecastTrainer:
             horizon_status.append(
                 {
                     "horizon_hours": horizon,
-                    "active_strategy": artifact["active_strategy"],
+                    "serving_strategy": artifact["serving_strategy"],
+                    "governance_strategy": artifact["governance_strategy"],
                     "selected_challenger": artifact["selected_challenger"],
                     "candidate_training_lookback_days": artifact[
                         "candidate_training_lookback_days"
@@ -135,7 +140,7 @@ class ForecastTrainer:
                     "promotion_threshold_pct": selection[
                         "promotion_threshold_pct"
                     ],
-                    "active_improvement_vs_persistence_pct": (
+                    "model_improvement_vs_persistence_pct": (
                         horizon_metrics.improvement_vs_persistence_pct
                     ),
                 }
@@ -151,6 +156,10 @@ class ForecastTrainer:
             "validation_method": (
                 "development walk-forward champion/challenger selection + "
                 "untouched 20% holdout + dual promotion gate"
+            ),
+            "serving_policy": (
+                "persist and serve the selected fitted estimator; keep promotion "
+                "gate as governance metadata"
             ),
             "feature_base_reused_across_horizons": True,
             "exogenous_features": self.dataset_builder.exogenous_metadata(),
