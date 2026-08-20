@@ -8,6 +8,7 @@ from pathlib import Path
 from qmg1.config import HORIZONS_HOURS
 from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.predictor import ForecastPredictor
+from qmg1.ml.serving_policy import PersistedArtifactServingPolicy
 from qmg1.serving.live_price import (
     BullionVaultLivePriceProvider,
     DukascopyLivePriceProvider,
@@ -113,7 +114,7 @@ class RuntimeSettings:
 
 
 class ServingDataLocator:
-    """Resolve optional persisted feature datasets for non-persistence champions."""
+    """Resolve persisted feature datasets needed by feature-dependent estimators."""
 
     def __init__(self, settings: RuntimeSettings) -> None:
         self.settings = settings
@@ -227,66 +228,78 @@ class ForecastApiService:
                 f"Unsupported horizon {request.horizon_hours}. Allowed hours: {allowed}."
             )
 
+    def _predict_with_live_quote(
+        self,
+        request: PredictionRequest,
+        artifact: dict[str, object],
+    ) -> dict[str, float | str | int]:
+        try:
+            quote = self.live_price_provider.latest_quote(request.metal)
+            result = self.predictor.predict_live_from_artifact(
+                artifact=artifact,
+                timestamp_utc=quote.timestamp_utc,
+                close_usd_per_kg=quote.close_usd_per_kg,
+            )
+            result["market_data_source"] = quote.source
+            LOGGER.info(
+                "predict_live_model_completed metal=%s horizon_hours=%s "
+                "strategy=%s quote_source=%s current_usd_per_kg=%.4f "
+                "predicted_usd_per_kg=%.4f",
+                request.metal,
+                request.horizon_hours,
+                result["serving_strategy"],
+                quote.source,
+                result["current_usd_per_kg"],
+                result["predicted_usd_per_kg"],
+            )
+            return result
+        except (
+            LivePriceUnavailableError,
+            FileNotFoundError,
+            ValueError,
+            OSError,
+        ) as exc:
+            LOGGER.warning(
+                "predict_live_model_failed metal=%s horizon_hours=%s exc_type=%s",
+                request.metal,
+                request.horizon_hours,
+                type(exc).__name__,
+            )
+            raise PredictionUnavailableError(str(exc)) from exc
+
     def _predict_with_artifact(
         self,
         request: PredictionRequest,
         artifact: dict[str, object],
     ) -> dict[str, float | str | int]:
-        active_strategy = str(artifact.get("active_strategy"))
-        if active_strategy == "persistence":
-            LOGGER.info(
-                "predict_persistence_path metal=%s horizon_hours=%s source_artifact=persistence",
-                request.metal,
-                request.horizon_hours,
-            )
-            try:
-                quote = self.live_price_provider.latest_quote(request.metal)
-                result = self.predictor.predict_live_persistence_from_artifact(
-                    artifact=artifact,
-                    timestamp_utc=quote.timestamp_utc,
-                    close_usd_per_kg=quote.close_usd_per_kg,
-                )
-                result["market_data_source"] = quote.source
-                LOGGER.info(
-                    "predict_quoted metal=%s horizon_hours=%s quote_source=%s "
-                    "current_usd_per_kg=%.4f predicted_usd_per_kg=%.4f",
-                    request.metal,
-                    request.horizon_hours,
-                    quote.source,
-                    result["current_usd_per_kg"],
-                    result["predicted_usd_per_kg"],
-                )
-                return result
-            except (
-                LivePriceUnavailableError,
-                FileNotFoundError,
-                ValueError,
-                OSError,
-            ) as exc:
-                LOGGER.warning(
-                    "predict_live_quote_failed metal=%s horizon_hours=%s exc_type=%s",
-                    request.metal,
-                    request.horizon_hours,
-                    type(exc).__name__,
-                )
-                raise PredictionUnavailableError(str(exc)) from exc
+        try:
+            decision = PersistedArtifactServingPolicy.resolve(artifact)
+        except ValueError as exc:
+            raise PredictionUnavailableError(str(exc)) from exc
 
         LOGGER.info(
-            "predict_model_path metal=%s horizon_hours=%s selected_challenger=%s",
+            "predict_model_path metal=%s horizon_hours=%s serving_strategy=%s "
+            "governance_strategy=%s",
             request.metal,
             request.horizon_hours,
-            artifact.get("selected_challenger"),
+            decision.serving_strategy,
+            decision.governance_strategy,
         )
+
         target_csv = self.locator.target_csv(request.metal)
         if target_csv is None:
+            if not decision.feature_data_required:
+                return self._predict_with_live_quote(request, artifact)
+
             LOGGER.error(
-                "predict_missing_target_csv metal=%s models_dir=%s",
+                "predict_missing_target_csv metal=%s models_dir=%s strategy=%s",
                 request.metal,
                 self.settings.models_dir,
+                decision.serving_strategy,
             )
             raise PredictionUnavailableError(
-                f"The trained {request.metal} champion requires persisted feature data, "
-                "but its serving dataset is not mounted."
+                f"The persisted {request.metal} {decision.serving_strategy} model "
+                "requires serving feature data, but its dataset is not mounted."
             )
 
         try:
