@@ -66,10 +66,14 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
     assert math.isfinite(metrics.mae_usd_per_kg)
 
     artifact = repository.load("silver", 2)
-    assert artifact["schema_version"] == 6
+    assert artifact["schema_version"] == 7
     assert artifact["validation_method"].startswith("development walk-forward")
     assert artifact["exogenous_features"] == []
     assert "candidate_training_lookback_days" in artifact
+    assert artifact["serving_strategy"] == artifact["selected_challenger"]
+    assert artifact["governance_strategy"] == artifact["active_strategy"]
+    assert artifact["model_metrics"] == artifact["metrics"]
+
     development_candidates = artifact["selection"]["development_candidates"]
     assert [item["model_name"] for item in development_candidates] == [
         "median_return",
@@ -89,10 +93,13 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
 
     assert prediction["metal"] == "silver"
     assert prediction["horizon_hours"] == 2
-    assert prediction["active_strategy"] in {
-        "persistence",
-        artifact["selected_challenger"],
-    }
+    assert prediction["active_strategy"] == artifact["selected_challenger"]
+    assert prediction["serving_strategy"] == artifact["selected_challenger"]
+    assert prediction["governance_strategy"] == artifact["active_strategy"]
+    assert (
+        prediction["validation_directional_accuracy_pct"]
+        == artifact["model_metrics"]["directional_accuracy_pct"]
+    )
     assert float(prediction["current_usd_per_kg"]) > 0
     assert float(prediction["predicted_usd_per_kg"]) > 0
     assert math.isfinite(float(prediction["predicted_change_pct"]))
