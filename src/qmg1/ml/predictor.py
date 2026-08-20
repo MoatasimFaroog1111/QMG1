@@ -19,10 +19,11 @@ from qmg1.ml.exogenous import (
     UsdIndexFeatureProvider,
     WtiFeatureProvider,
 )
+from qmg1.ml.serving_policy import PersistedArtifactServingPolicy
 
 
 class ForecastPredictor:
-    """Load persisted champion strategy and predict without retraining."""
+    """Load persisted trained estimators and predict without retraining."""
 
     def __init__(self, artifact_repository: ModelArtifactRepository) -> None:
         self.artifact_repository = artifact_repository
@@ -69,8 +70,9 @@ class ForecastPredictor:
         current_close: float,
         predicted_log_return: float,
     ) -> dict[str, float | str | int]:
+        decision = PersistedArtifactServingPolicy.resolve(artifact)
+        metrics = decision.model_metrics
         predicted_close = current_close * math.exp(predicted_log_return)
-        metrics = artifact["metrics"]
         low_log_return = predicted_log_return + float(metrics["residual_log_return_q10"])
         high_log_return = predicted_log_return + float(metrics["residual_log_return_q90"])
         horizon_hours = int(artifact["horizon_hours"])
@@ -81,8 +83,10 @@ class ForecastPredictor:
                 timestamp + pd.Timedelta(hours=horizon_hours)
             ).isoformat(),
             "horizon_hours": horizon_hours,
-            "active_strategy": str(artifact.get("active_strategy", "model")),
-            "selected_challenger": str(artifact.get("selected_challenger", "unknown")),
+            "active_strategy": decision.serving_strategy,
+            "serving_strategy": decision.serving_strategy,
+            "governance_strategy": decision.governance_strategy,
+            "selected_challenger": decision.selected_challenger,
             "current_usd_per_kg": current_close,
             "predicted_usd_per_kg": predicted_close,
             "prediction_interval_80_low_usd_per_kg": current_close
@@ -91,6 +95,7 @@ class ForecastPredictor:
             * math.exp(high_log_return),
             "predicted_change_pct": (predicted_close / current_close - 1.0) * 100.0,
             "validation_mae_usd_per_kg": float(metrics["mae_usd_per_kg"]),
+            "validation_smape_pct": float(metrics["smape_pct"]),
             "validation_directional_accuracy_pct": float(
                 metrics["directional_accuracy_pct"]
             ),
@@ -98,40 +103,36 @@ class ForecastPredictor:
                 metrics["improvement_vs_persistence_pct"]
             ),
             "interval_note": (
-                "Empirical 10th-90th percentile of untouched holdout "
-                "log-return residuals; not a guarantee."
+                "Historical 10th-90th percentile residual range from the served "
+                "model's untouched holdout."
             ),
         }
 
-    def predict_live_persistence_from_artifact(
+    def predict_live_from_artifact(
         self,
         artifact: dict[str, object],
         timestamp_utc: datetime,
         close_usd_per_kg: float,
     ) -> dict[str, float | str | int]:
-        """Apply the persisted champion decision without loading or training anything else."""
+        """Run a feature-independent persisted estimator against a live market quote."""
 
-        if str(artifact.get("active_strategy")) != "persistence":
-            raise ValueError("The active champion requires feature-based persisted inference")
+        decision = PersistedArtifactServingPolicy.resolve(artifact)
+        if decision.feature_data_required:
+            raise ValueError(
+                f"The persisted {decision.serving_strategy} model requires feature data"
+            )
+
+        feature_columns = list(artifact.get("feature_columns", []))
+        live_features = pd.DataFrame(
+            [{column: 0.0 for column in feature_columns}],
+            columns=feature_columns,
+        )
+        predicted_log_return = float(artifact["model"].predict(live_features)[0])
         return self._build_result(
             artifact,
             pd.Timestamp(timestamp_utc),
             float(close_usd_per_kg),
-            0.0,
-        )
-
-    def predict_live_persistence(
-        self,
-        metal: str,
-        horizon_hours: int,
-        timestamp_utc: datetime,
-        close_usd_per_kg: float,
-    ) -> dict[str, float | str | int]:
-        artifact = self.artifact_repository.load(metal, horizon_hours)
-        return self.predict_live_persistence_from_artifact(
-            artifact,
-            timestamp_utc,
-            close_usd_per_kg,
+            predicted_log_return,
         )
 
     def predict_latest_from_artifact(
@@ -140,37 +141,28 @@ class ForecastPredictor:
         artifact: dict[str, object],
         exogenous_csv_paths: Mapping[str, str] | None = None,
     ) -> dict[str, float | str | int]:
-        """Predict from an already loaded persisted artifact and the latest serving features."""
+        """Predict with the fitted estimator stored in an already trained artifact."""
 
-        active_strategy = str(artifact.get("active_strategy", "model"))
-
+        PersistedArtifactServingPolicy.resolve(artifact)
         m1 = load_m1_csv(csv_path)
         hourly = resample_to_hourly(m1)
 
-        if active_strategy == "persistence":
-            ready_hourly = hourly.dropna(subset=["close"])
-            if ready_hourly.empty:
-                raise ValueError("No usable hourly close is available for prediction")
-            timestamp = ready_hourly.index[-1]
-            current_close = float(ready_hourly.iloc[-1]["close"])
-            predicted_log_return = 0.0
-        else:
-            builder = self._dataset_builder_for_artifact(artifact, exogenous_csv_paths)
-            frame = build_features(hourly)
-            for provider in builder.exogenous_providers:
-                frame = provider.augment(frame, hourly)
+        builder = self._dataset_builder_for_artifact(artifact, exogenous_csv_paths)
+        frame = build_features(hourly)
+        for provider in builder.exogenous_providers:
+            frame = provider.augment(frame, hourly)
 
-            feature_columns: list[str] = artifact["feature_columns"]
-            ready = frame.dropna(subset=feature_columns)
-            if ready.empty:
-                raise ValueError("No feature-complete row is available for prediction")
+        feature_columns: list[str] = artifact["feature_columns"]
+        ready = frame.dropna(subset=feature_columns)
+        if ready.empty:
+            raise ValueError("No feature-complete row is available for prediction")
 
-            latest = ready.iloc[[-1]]
-            timestamp = ready.index[-1]
-            current_close = float(latest.iloc[0]["close"])
-            predicted_log_return = float(
-                artifact["model"].predict(latest[feature_columns])[0]
-            )
+        latest = ready.iloc[[-1]]
+        timestamp = ready.index[-1]
+        current_close = float(latest.iloc[0]["close"])
+        predicted_log_return = float(
+            artifact["model"].predict(latest[feature_columns])[0]
+        )
 
         return self._build_result(
             artifact,
@@ -186,7 +178,7 @@ class ForecastPredictor:
         horizon_hours: int,
         exogenous_csv_paths: Mapping[str, str] | None = None,
     ) -> dict[str, float | str | int]:
-        artifact = self.artifact_repository.load(metal, horizon_hours)
+        artifact = self.artifact_repository.load_trained(metal, horizon_hours)
         return self.predict_latest_from_artifact(
             csv_path=csv_path,
             artifact=artifact,
