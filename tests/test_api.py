@@ -53,6 +53,9 @@ def test_dashboard_is_served_at_root(tmp_path: Path) -> None:
     assert "QMG1" in response.text
     assert 'id="prediction-form"' in response.text
     assert 'src="/assets/js/app.js"' in response.text
+    assert "نطاق عدم اليقين التاريخي 80%" in response.text
+    assert "دقة الاتجاه التاريخية" in response.text
+    assert "نطاق مبني على residuals خارج العينة، وليس ضمانًا سعريًا." not in response.text
 
 
 def test_api_metadata_exposes_requested_forecast_horizons(tmp_path: Path) -> None:
@@ -81,6 +84,7 @@ def test_dashboard_static_assets_are_mounted(tmp_path: Path) -> None:
     css_response = client.get("/assets/css/app.css")
     js_response = client.get("/assets/js/app.js")
     api_js_response = client.get("/assets/js/api.js")
+    dashboard_js_response = client.get("/assets/js/dashboard.js")
 
     assert css_response.status_code == 200
     assert "--accent" in css_response.text
@@ -89,6 +93,9 @@ def test_dashboard_static_assets_are_mounted(tmp_path: Path) -> None:
     assert api_js_response.status_code == 200
     assert '"/web/predict"' in api_js_response.text
     assert "x-api-key" not in api_js_response.text.lower()
+    assert dashboard_js_response.status_code == 200
+    assert "available_models" in dashboard_js_response.text
+    assert "validation_directional_accuracy_pct" in dashboard_js_response.text
 
 
 def test_predict_returns_service_unavailable_without_persisted_data(tmp_path: Path) -> None:

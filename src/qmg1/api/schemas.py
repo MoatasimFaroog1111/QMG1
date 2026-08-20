@@ -41,6 +41,8 @@ class PredictionResponse(BaseModel):
     target_timestamp_utc: str
     horizon_hours: int
     active_strategy: str
+    serving_strategy: str
+    governance_strategy: str
     selected_challenger: str
     current_usd_per_kg: float
     predicted_usd_per_kg: float
@@ -48,6 +50,7 @@ class PredictionResponse(BaseModel):
     prediction_interval_80_high_usd_per_kg: float
     predicted_change_pct: float
     validation_mae_usd_per_kg: float
+    validation_smape_pct: float
     validation_directional_accuracy_pct: float
     validation_improvement_vs_persistence_pct: float
     interval_note: str

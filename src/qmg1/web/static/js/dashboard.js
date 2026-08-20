@@ -46,6 +46,8 @@ export class DashboardController {
     this.historyList = get("history-list");
     this.historyEmpty = get("history-empty");
     this.latestHealth = null;
+    this.availableModels = {};
+    this.allowedHorizons = new Set();
   }
 
   async init() {
@@ -61,12 +63,17 @@ export class DashboardController {
       void this.runPrediction();
     });
 
+    this.metalSelect.addEventListener("change", () => {
+      this.#syncAvailabilityForMetal();
+    });
+
     this.horizonSelect.addEventListener("change", () => {
       this.#syncHorizonButtons(this.horizonSelect.value);
     });
 
     document.querySelectorAll("[data-horizon]").forEach((button) => {
       button.addEventListener("click", () => {
+        if (button.disabled) return;
         this.horizonSelect.value = button.dataset.horizon;
         this.#syncHorizonButtons(button.dataset.horizon);
       });
@@ -83,13 +90,60 @@ export class DashboardController {
   async #loadMetadata() {
     try {
       const metadata = await this.api.metadata();
-      const allowed = new Set((metadata.forecast_horizons_hours || []).map(Number));
-      document.querySelectorAll("[data-horizon]").forEach((button) => {
-        button.disabled = !allowed.has(Number(button.dataset.horizon));
-      });
+      this.allowedHorizons = new Set(
+        (metadata.forecast_horizons_hours || []).map(Number),
+      );
+      this.availableModels = metadata.available_models || {};
+      this.#syncMetalAvailability();
+      this.#syncAvailabilityForMetal();
     } catch {
       // Health rendering already provides the primary connectivity signal.
     }
+  }
+
+  #syncMetalAvailability() {
+    const availableMetals = new Set(
+      Object.entries(this.availableModels)
+        .filter(([, horizons]) => Array.isArray(horizons) && horizons.length > 0)
+        .map(([metal]) => metal),
+    );
+
+    Array.from(this.metalSelect.options).forEach((option) => {
+      option.disabled = !availableMetals.has(option.value);
+    });
+
+    if (!availableMetals.has(this.metalSelect.value)) {
+      const firstAvailable = Array.from(this.metalSelect.options).find(
+        (option) => !option.disabled,
+      );
+      if (firstAvailable) this.metalSelect.value = firstAvailable.value;
+    }
+  }
+
+  #syncAvailabilityForMetal() {
+    const modelHorizons = new Set(
+      (this.availableModels[this.metalSelect.value] || []).map(Number),
+    );
+    const supported = new Set(
+      [...modelHorizons].filter((horizon) => this.allowedHorizons.has(horizon)),
+    );
+
+    Array.from(this.horizonSelect.options).forEach((option) => {
+      option.disabled = !supported.has(Number(option.value));
+    });
+
+    document.querySelectorAll("[data-horizon]").forEach((button) => {
+      button.disabled = !supported.has(Number(button.dataset.horizon));
+    });
+
+    if (!supported.has(Number(this.horizonSelect.value))) {
+      const firstAvailable = Array.from(this.horizonSelect.options).find(
+        (option) => !option.disabled,
+      );
+      if (firstAvailable) this.horizonSelect.value = firstAvailable.value;
+    }
+    this.#syncHorizonButtons(this.horizonSelect.value);
+    this.predictButton.disabled = supported.size === 0;
   }
 
   async refreshHealth() {
@@ -218,9 +272,15 @@ export class DashboardController {
       "result-range-text",
       `${formatPrice(result.prediction_interval_80_low_usd_per_kg)} — ${formatPrice(result.prediction_interval_80_high_usd_per_kg)}`,
     );
-    setText("result-strategy", result.active_strategy || "—");
-    setText("result-challenger", result.selected_challenger || "—");
-    setText("result-directional", formatPercent(result.validation_directional_accuracy_pct));
+    setText(
+      "result-strategy",
+      result.serving_strategy || result.active_strategy || "—",
+    );
+    setText("result-challenger", result.governance_strategy || "—");
+    setText(
+      "result-directional",
+      formatPercent(result.validation_directional_accuracy_pct),
+    );
     setText(
       "result-improvement",
       formatPercent(result.validation_improvement_vs_persistence_pct),
@@ -263,11 +323,15 @@ export class DashboardController {
     this.predictButton.classList.toggle("loading", loading);
     const label = this.predictButton.querySelector(".button-label");
     if (label) label.textContent = loading ? "جاري التنبؤ…" : "تشغيل التنبؤ";
+    if (!loading) this.#syncAvailabilityForMetal();
   }
 
   #syncHorizonButtons(value) {
     document.querySelectorAll("[data-horizon]").forEach((button) => {
-      button.classList.toggle("active", button.dataset.horizon === String(value));
+      button.classList.toggle(
+        "active",
+        !button.disabled && button.dataset.horizon === String(value),
+      );
     });
   }
 
@@ -279,7 +343,7 @@ export class DashboardController {
       predicted_usd_per_kg: result.predicted_usd_per_kg,
       current_usd_per_kg: result.current_usd_per_kg,
       predicted_change_pct: result.predicted_change_pct,
-      active_strategy: result.active_strategy,
+      active_strategy: result.serving_strategy || result.active_strategy,
       target_timestamp_utc: result.target_timestamp_utc,
       saved_at: new Date().toISOString(),
     });
