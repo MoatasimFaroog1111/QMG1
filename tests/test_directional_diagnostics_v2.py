@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-from qmg1.ml.directional import DirectionDiagnostics
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from qmg1.ml.directional import DirectionDiagnostics  # noqa: E402
 
 
 def _frame(rows: int = 1_200) -> pd.DataFrame:
