@@ -74,7 +74,7 @@ def test_train_persist_load_predict_roundtrip(tmp_path: Path) -> None:
     assert [item["model_name"] for item in development_candidates] == [
         "median_return",
         "selective_hgb_q80_s25",
-        "cross_fitted_selective_hgb",
+        "purged_cross_fitted_selective_hgb",
     ]
     assert all(
         candidate["metrics"]["cv_splits"] == 2

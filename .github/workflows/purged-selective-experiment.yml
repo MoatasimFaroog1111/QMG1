@@ -1,0 +1,72 @@
+name: Purged Selective Silver Experiment
+
+on:
+  push:
+    branches:
+      - "agent/purged-selective-calibration"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/qmg1/ml/purged_selective.py"
+      - "src/qmg1/ml/model_factory.py"
+      - "src/qmg1/ml/selection.py"
+      - "src/qmg1/ml/targets.py"
+      - "tests/test_cross_fitted_selective.py"
+      - "tests/test_model_roundtrip.py"
+      - ".github/workflows/purged-selective-experiment.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qmg1-purged-selective-silver-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+
+      - name: Verify selective calibration tests
+        run: python -m pytest -q tests/test_cross_fitted_selective.py tests/test_model_roundtrip.py
+
+      - name: Download Silver target data
+        run: python scripts/prepare_hourly_training_data.py --metal silver --cleanup-raw
+
+      - name: Download Gold exogenous context
+        run: python scripts/prepare_hourly_training_data.py --metal gold --cleanup-raw
+
+      - name: Download US Dollar Index context
+        run: python scripts/prepare_market_series.py --series udx --cleanup-raw
+
+      - name: Download S&P 500 context
+        run: python scripts/prepare_market_series.py --series spx --cleanup-raw
+
+      - name: Train leakage-safe Silver challengers
+        run: python scripts/train_hourly_models.py --metal silver --models-dir experiment_models
+
+      - name: Show experiment report
+        run: cat experiment_models/silver/silver_training_report.json
+
+      - name: Upload experiment models and report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qmg1-purged-selective-silver-${{ github.run_id }}
+          path: experiment_models/silver/
+          if-no-files-found: error
+          retention-days: 14
