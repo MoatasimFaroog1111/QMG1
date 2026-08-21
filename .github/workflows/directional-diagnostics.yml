@@ -9,13 +9,21 @@ on:
       - "scripts/directional_diagnostics.py"
       - "tests/test_directional_diagnostics_v2.py"
       - ".github/workflows/directional-diagnostics.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/qmg1/ml/directional.py"
+      - "scripts/directional_diagnostics.py"
+      - "tests/test_directional_diagnostics_v2.py"
+      - ".github/workflows/directional-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: qmg1-silver-directional-diagnostics
+  group: qmg1-silver-directional-diagnostics-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
