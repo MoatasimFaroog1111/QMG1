@@ -1,0 +1,74 @@
+name: Silver Directional Diagnostics
+
+on:
+  push:
+    branches:
+      - "agent/directional-diagnostics-v2"
+    paths:
+      - "src/qmg1/ml/directional.py"
+      - "scripts/directional_diagnostics.py"
+      - "tests/test_directional_diagnostics_v2.py"
+      - ".github/workflows/directional-diagnostics.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/qmg1/ml/directional.py"
+      - "scripts/directional_diagnostics.py"
+      - "tests/test_directional_diagnostics_v2.py"
+      - ".github/workflows/directional-diagnostics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qmg1-silver-directional-diagnostics-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+
+      - name: Verify diagnostic unit tests
+        run: python -m pytest -q tests/test_directional_diagnostics_v2.py
+
+      - name: Download Silver target data
+        run: python scripts/prepare_hourly_training_data.py --metal silver --cleanup-raw
+
+      - name: Download Gold exogenous context
+        run: python scripts/prepare_hourly_training_data.py --metal gold --cleanup-raw
+
+      - name: Download US Dollar Index context
+        run: python scripts/prepare_market_series.py --series udx --cleanup-raw
+
+      - name: Download S&P 500 context
+        run: python scripts/prepare_market_series.py --series spx --cleanup-raw
+
+      - name: Run direction diagnostics
+        run: python scripts/directional_diagnostics.py --data-dir training_data/hourly --output directional_diagnostics.json
+
+      - name: Show diagnostic report
+        run: cat directional_diagnostics.json
+
+      - name: Upload diagnostic report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qmg1-silver-directional-diagnostics-${{ github.run_id }}
+          path: directional_diagnostics.json
+          if-no-files-found: error
+          retention-days: 14
