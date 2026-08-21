@@ -4,6 +4,9 @@ import numpy as np
 import pandas as pd
 
 
+DEFAULT_MAX_FORWARD_TOLERANCE_HOURS = 72
+
+
 class CalendarHorizonTargetBuilder:
     """Build targets using real elapsed clock time, not a row-count shift.
 
@@ -11,7 +14,10 @@ class CalendarHorizonTargetBuilder:
     available hourly close at or after the requested timestamp is used.
     """
 
-    def __init__(self, max_forward_tolerance_hours: int = 72) -> None:
+    def __init__(
+        self,
+        max_forward_tolerance_hours: int = DEFAULT_MAX_FORWARD_TOLERANCE_HOURS,
+    ) -> None:
         self.max_forward_tolerance = pd.Timedelta(hours=max_forward_tolerance_hours)
 
     def attach(
@@ -32,7 +38,11 @@ class CalendarHorizonTargetBuilder:
         positions = source_index.searchsorted(requested_times, side="left")
 
         future_values = np.full(len(feature_frame), np.nan, dtype=float)
-        effective_times = np.full(len(feature_frame), np.datetime64("NaT"), dtype="datetime64[ns]")
+        effective_times = np.full(
+            len(feature_frame),
+            np.datetime64("NaT"),
+            dtype="datetime64[ns]",
+        )
 
         valid_position = positions < len(source_index)
         valid_rows = np.flatnonzero(valid_position)
@@ -43,7 +53,9 @@ class CalendarHorizonTargetBuilder:
             requested_ts = requested_times[row_idx]
             if effective_ts - requested_ts <= self.max_forward_tolerance:
                 future_values[row_idx] = float(source_close.iloc[source_pos])
-                effective_times[row_idx] = effective_ts.tz_convert("UTC").tz_localize(None).to_datetime64()
+                effective_times[row_idx] = (
+                    effective_ts.tz_convert("UTC").tz_localize(None).to_datetime64()
+                )
 
         result = feature_frame.copy()
         future_col = f"future_close_{horizon_hours}h"

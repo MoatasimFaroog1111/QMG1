@@ -11,10 +11,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from qmg1.config import TrainingConfig
+from qmg1.ml.purged_selective import PurgedCrossFittedSelectiveRegressor
 from qmg1.ml.selective import (
     CrossFittedSelectiveRegressor,
     SelectiveShrinkageRegressor,
 )
+from qmg1.ml.targets import DEFAULT_MAX_FORWARD_TOLERANCE_HOURS
 
 
 class RegressorFactory(Protocol):
@@ -64,6 +66,8 @@ class SelectiveHistGradientBoostingFactory:
 
 @dataclass(frozen=True)
 class CrossFittedSelectiveHgbFactory:
+    """Legacy unpurged calibrator retained for reproducibility only."""
+
     config: TrainingConfig
     lookback_days: int | None = None
 
@@ -77,6 +81,34 @@ class CrossFittedSelectiveHgbFactory:
             calibration_splits=3,
             activation_quantiles=(0.50, 0.70, 0.80, 0.90, 0.95),
             shrinkages=(0.10, 0.25, 0.50, 0.75, 1.00),
+        )
+
+
+@dataclass(frozen=True)
+class PurgedCrossFittedSelectiveHgbFactory:
+    config: TrainingConfig
+    horizon_hours: int
+    lookback_days: int | None = None
+    target_forward_tolerance_hours: int = DEFAULT_MAX_FORWARD_TOLERANCE_HOURS
+
+    @property
+    def name(self) -> str:
+        return _with_lookback_name(
+            "purged_cross_fitted_selective_hgb",
+            self.lookback_days,
+        )
+
+    @property
+    def purge_hours(self) -> int:
+        return self.horizon_hours + self.target_forward_tolerance_hours
+
+    def create(self) -> PurgedCrossFittedSelectiveRegressor:
+        return PurgedCrossFittedSelectiveRegressor(
+            base_estimator=_base_hgb(self.config),
+            calibration_splits=3,
+            activation_quantiles=(0.50, 0.70, 0.80, 0.90, 0.95),
+            shrinkages=(0.10, 0.25, 0.50, 0.75, 1.00),
+            purge_hours=self.purge_hours,
         )
 
 
@@ -145,14 +177,15 @@ def apply_training_lookback(
     return frame[frame.index >= cutoff]
 
 
-def candidate_factories(config: TrainingConfig) -> tuple[RegressorFactory, ...]:
-    """Focused candidate set after empirical pruning on full Silver history.
+def candidate_factories(
+    config: TrainingConfig,
+    horizon_hours: int = 0,
+) -> tuple[RegressorFactory, ...]:
+    """Focused candidate set with leakage-safe nested calibration.
 
-    Ridge and 2y/5y recency challengers were materially worse than Persistence
-    across the requested horizons. They remain available as components for
-    explicit experiments, but are removed from routine training. The focused
-    set keeps a cheap location baseline, the strongest fixed selective rule
-    seen in Development, and the new nested cross-fitted calibrator.
+    Ridge and recency challengers remain available for explicit experiments but
+    are not part of routine training. The nested calibrator now applies a
+    conservative inner purge equal to ``horizon + target-forward tolerance``.
     """
     return (
         MedianReturnFactory(),
@@ -161,5 +194,8 @@ def candidate_factories(config: TrainingConfig) -> tuple[RegressorFactory, ...]:
             activation_quantile=0.80,
             shrinkage=0.25,
         ),
-        CrossFittedSelectiveHgbFactory(config=config),
+        PurgedCrossFittedSelectiveHgbFactory(
+            config=config,
+            horizon_hours=horizon_hours,
+        ),
     )

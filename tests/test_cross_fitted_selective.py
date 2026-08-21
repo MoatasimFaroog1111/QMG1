@@ -7,6 +7,7 @@ from sklearn.linear_model import Ridge
 
 from qmg1.config import TrainingConfig
 from qmg1.ml.model_factory import candidate_factories
+from qmg1.ml.purged_selective import PurgedCrossFittedSelectiveRegressor
 from qmg1.ml.selective import CrossFittedSelectiveRegressor
 
 
@@ -47,6 +48,43 @@ def test_cross_fitted_inner_predictions_are_strictly_forward() -> None:
         assert train_max < validation_min
 
 
+def test_purged_cross_fitted_inner_labels_end_before_validation() -> None:
+    CausalProbeRegressor.fit_maxima.clear()
+    CausalProbeRegressor.predict_minima.clear()
+
+    rows = 600
+    index = pd.date_range("2025-01-01", periods=rows, freq="h", tz="UTC")
+    X = pd.DataFrame(
+        {
+            "time_ordinal": np.arange(rows, dtype=float),
+            "close": np.full(rows, 1_500.0),
+        },
+        index=index,
+    )
+    y = pd.Series(
+        np.sin(np.arange(rows, dtype=float) / 20.0) * 0.001,
+        index=index,
+    )
+
+    purge_hours = 74
+    model = PurgedCrossFittedSelectiveRegressor(
+        base_estimator=CausalProbeRegressor(),
+        calibration_splits=3,
+        purge_hours=purge_hours,
+    )
+    model.fit(X, y)
+
+    for train_max, validation_min in zip(
+        CausalProbeRegressor.fit_maxima[:3],
+        CausalProbeRegressor.predict_minima[:3],
+        strict=True,
+    ):
+        assert train_max + purge_hours < validation_min
+
+    assert model.inner_purge_hours_ == purge_hours
+    assert model.completed_purged_calibration_folds_ == 3
+
+
 def test_cross_fitted_calibration_optimizes_price_mae_from_oof_only() -> None:
     rows = 600
     signal = np.linspace(-1.0, 1.0, rows)
@@ -75,12 +113,17 @@ def test_cross_fitted_calibration_optimizes_price_mae_from_oof_only() -> None:
     assert np.isfinite(prediction).all()
 
 
-def test_routine_candidate_set_is_empirically_pruned() -> None:
-    names = [factory.name for factory in candidate_factories(TrainingConfig())]
+def test_routine_candidate_set_uses_purged_nested_calibration() -> None:
+    factories = candidate_factories(TrainingConfig(), horizon_hours=2)
+    names = [factory.name for factory in factories]
     assert names == [
         "median_return",
         "selective_hgb_q80_s25",
-        "cross_fitted_selective_hgb",
+        "purged_cross_fitted_selective_hgb",
     ]
     assert not any("ridge" in name for name in names)
     assert not any("lookback" in name for name in names)
+
+    nested = factories[-1].create()
+    # 2h horizon + 72h maximum target-forward tolerance.
+    assert nested.purge_hours == 74

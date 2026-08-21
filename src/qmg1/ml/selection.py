@@ -78,7 +78,7 @@ class ChampionChallengerSelector:
             raise ValueError("Holdout segment is empty")
 
         scores: list[CandidateScore] = []
-        factories = candidate_factories(self.config)
+        factories = candidate_factories(self.config, horizon_hours=horizon_hours)
         for factory in factories:
             print(f"  [CHALLENGER] {factory.name}")
             metrics = WalkForwardEvaluator(self.config, factory).evaluate(
