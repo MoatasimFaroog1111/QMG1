@@ -204,6 +204,7 @@ export class DashboardController {
   #renderResult(result) {
     const metal = metalInfo(result.metal);
     const direction = directionFor(result.predicted_change_pct);
+    const directionalApplicable = result.active_strategy !== "persistence";
 
     get("result-empty").hidden = true;
     get("result-content").hidden = false;
@@ -220,7 +221,12 @@ export class DashboardController {
     );
     setText("result-strategy", result.active_strategy || "—");
     setText("result-challenger", result.selected_challenger || "—");
-    setText("result-directional", formatPercent(result.validation_directional_accuracy_pct));
+    setText(
+      "result-directional",
+      directionalApplicable
+        ? formatPercent(result.validation_directional_accuracy_pct)
+        : "غير منطبق",
+    );
     setText(
       "result-improvement",
       formatPercent(result.validation_improvement_vs_persistence_pct),
