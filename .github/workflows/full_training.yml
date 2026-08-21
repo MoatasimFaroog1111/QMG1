@@ -17,6 +17,7 @@ on:
     branches:
       - "agent/metals-ml-foundation"
       - "agent/full-training-execution"
+      - "agent/directional-diagnostics"
     paths:
       - ".github/triggers/full-training"
 

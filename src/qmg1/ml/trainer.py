@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from qmg1.config import HORIZONS_HOURS, TrainingConfig
 from qmg1.ml.artifacts import ModelArtifactRepository
 from qmg1.ml.dataset import FeatureBase, ForecastDatasetBuilder, PreparedDataset
+from qmg1.ml.directional import DirectionDiagnostics
 from qmg1.ml.evaluation import HorizonMetrics
 from qmg1.ml.model_factory import apply_training_lookback
 from qmg1.ml.selection import ChampionChallengerSelector
@@ -26,6 +27,24 @@ class ForecastTrainer:
         self.dataset_builder = dataset_builder or ForecastDatasetBuilder()
         self.artifact_repository = artifact_repository
         self.selector = ChampionChallengerSelector(self.config)
+
+    def _directional_diagnostic(
+        self,
+        prepared: PreparedDataset,
+    ) -> dict[str, object]:
+        frame = prepared.frame
+        split_at = int(len(frame) * 0.80)
+        development = frame.iloc[:split_at]
+        metrics = DirectionDiagnostics.walk_forward_classifier(
+            frame=development,
+            feature_columns=prepared.feature_columns,
+            horizon_hours=prepared.horizon_hours,
+            cv_splits=self.config.cv_splits,
+        )
+        result = asdict(metrics)
+        result["scope"] = "development_walk_forward_only"
+        result["production_effect"] = "none"
+        return result
 
     def _train_prepared(
         self,
@@ -47,6 +66,7 @@ class ForecastTrainer:
             features,
             horizon_hours,
         )
+        directional_diagnostic = self._directional_diagnostic(prepared)
 
         target_col = f"target_{horizon_hours}h"
         final_reference = frame.index[-1]
@@ -83,6 +103,7 @@ class ForecastTrainer:
             "selected_challenger": selection.selected_model_name,
             "selection": selection.to_dict(),
             "metrics": asdict(active_metrics),
+            "directional_diagnostic": directional_diagnostic,
             "model": final_model,
         }
         self.artifact_repository.save(metal, horizon_hours, artifact)
@@ -138,6 +159,7 @@ class ForecastTrainer:
                     "active_improvement_vs_persistence_pct": (
                         horizon_metrics.improvement_vs_persistence_pct
                     ),
+                    "directional_diagnostic": artifact["directional_diagnostic"],
                 }
             )
 
@@ -151,6 +173,10 @@ class ForecastTrainer:
             "validation_method": (
                 "development walk-forward champion/challenger selection + "
                 "untouched 20% holdout + dual promotion gate"
+            ),
+            "directional_diagnostic_method": (
+                "diagnostic-only balanced logistic classifier on development "
+                "walk-forward folds with target-time purge; no production effect"
             ),
             "feature_base_reused_across_horizons": True,
             "exogenous_features": self.dataset_builder.exogenous_metadata(),
